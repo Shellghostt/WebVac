@@ -24,7 +24,7 @@ def print_banner():
     print(Fore.CYAN + "  | |/ |/ / -_)/ __/  | |/ / _ `/|/ ___/ ")
     print(Fore.CYAN + "  |__/|__/\\__/ \\__/   |___/\\_,_/ |/      ")
     print(Fore.CYAN + "                                         ")
-    print(Fore.CYAN + "     INTERACTIVE SCRAPER & CRAWLER MENU   ")
+    print(Fore.CYAN + "     INTERACTIVE WEB SCRAPER MENU   ")
     print(Fore.CYAN + "=" * width)
 
 
@@ -122,16 +122,37 @@ def main():
             break
 
         if action == "View Diff Folder":
-            diff_dir = os.path.join("scraped_data", "diffs")
-            if os.path.exists(diff_dir):
-                files = os.listdir(diff_dir)
-                print(Fore.CYAN + f"\nContents of {diff_dir}:" + Style.RESET_ALL)
-                if not files:
-                    print("  (Folder is empty)")
-                for f in sorted(files):
-                    print(f"  - {f}")
+            base = "scraped_data"
+            if not os.path.exists(base):
+                print(Fore.YELLOW + f"\nDirectory {base} does not exist yet (run a scan first)." + Style.RESET_ALL)
             else:
-                print(Fore.YELLOW + f"\nDirectory {diff_dir} does not exist yet (run a scan first)." + Style.RESET_ALL)
+                print(Fore.CYAN + f"\nScan output under {base}:" + Style.RESET_ALL)
+                for target_dir in sorted(os.listdir(base)):
+                    target_path = os.path.join(base, target_dir)
+                    if not os.path.isdir(target_path):
+                        continue
+                    diffs = os.path.join(target_path, "diffs")
+                    scans_root = os.path.join(target_path, "scans")
+                    scan_count = 0
+                    if os.path.isdir(scans_root):
+                        scan_count = len([
+                            d for d in os.listdir(scans_root)
+                            if os.path.isdir(os.path.join(scans_root, d))
+                        ])
+                    print(Fore.WHITE + f"\n  {target_dir} ({scan_count} scan(s))" + Style.RESET_ALL)
+                    if os.path.isdir(diffs):
+                        diff_files = sorted(os.listdir(diffs))
+                        if diff_files:
+                            print(Fore.CYAN + f"    diffs/ ({len(diff_files)} file(s)):" + Style.RESET_ALL)
+                            for f in diff_files[-5:]:
+                                print(f"      - {target_dir}/diffs/{f}")
+                        else:
+                            print("    diffs/ (empty)")
+                    if os.path.isdir(scans_root):
+                        latest = sorted(os.listdir(scans_root))[-3:]
+                        for s in latest:
+                            print(Fore.GREEN + f"    scans/{s}/" + Style.RESET_ALL)
+                            print("      scrape/report.html  assets/pdfs/")
             input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
             continue
 
@@ -220,8 +241,10 @@ def main():
             p_file = select_proxy_file()
             if p_file:
                 cmd_args += ["--proxy-file", p_file]
-                strategy = prompt_choice("Proxy selection strategy", ["random", "round_robin"], 0)
-                cmd_args += ["--proxy-strategy", strategy]
+                strategy = prompt_choice("Proxy selection strategy", ["latency (Recommended)", "random", "round_robin"], 0)
+                strategy_val = "latency" if "latency" in strategy else strategy
+                cmd_args += ["--proxy-strategy", strategy_val]
+
 
         # Headless mode configurations
         headless_choice = prompt_choice("Run browser in headless mode?", ["Yes (Invisible background, fastest)", "No (Visible headed window, useful to bypass/see captchas)"], 0)
@@ -236,6 +259,15 @@ def main():
         )
         if screenshot_choice == "No (disable screenshots)":
             cmd_args.append("--no-screenshots")
+
+        if action == "Website Crawler":
+            allow_sub = prompt_choice(
+                "Follow subdomains during crawl?",
+                ["Same host only (default)", "Include subdomains (--allow-subdomains)"],
+                0,
+            )
+            if "Include subdomains" in allow_sub:
+                cmd_args.append("--allow-subdomains")
 
         # Run configured command
         run_command(cmd_args)

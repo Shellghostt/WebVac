@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebVac Architecture — One Page</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: #f0f4f8;
+      color: #1a2332;
+      font-size: 9.5px;
+      line-height: 1.35;
+    }
+    .page {
+      width: 277mm;
+      min-height: 190mm;
+      margin: 12px auto;
+      background: #fff;
+      padding: 14px 16px 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.12);
+    }
+    @media print {
+      body { background: #fff; }
+      .page { margin: 0; box-shadow: none; width: 100%; min-height: auto; }
+      .no-print { display: none !important; }
+    }
+    .no-print {
+      text-align: center; padding: 8px; background: #e8f4fc;
+      border: 1px solid #b8d4e8; border-radius: 6px; margin-bottom: 10px;
+      font-size: 11px;
+    }
+    header {
+      display: flex; justify-content: space-between; align-items: flex-end;
+      border-bottom: 3px solid #0d6efd; padding-bottom: 8px; margin-bottom: 10px;
+    }
+    h1 { font-size: 22px; font-weight: 700; color: #0d6efd; letter-spacing: -0.5px; }
+    .subtitle { font-size: 11px; color: #5a6a7a; margin-top: 2px; }
+    .meta { text-align: right; font-size: 8.5px; color: #6c7a89; }
+    .meta strong { color: #1a2332; }
+
+    .grid-main {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .layer {
+      border: 1.5px solid #c5d3e0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .layer-hdr {
+      padding: 5px 8px;
+      font-weight: 700;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #fff;
+    }
+    .hdr-entry   { background: #495057; }
+    .hdr-crawl   { background: #0d6efd; }
+    .hdr-browser { background: #198754; }
+    .hdr-data    { background: #6f42c1; }
+    .hdr-vapt    { background: #dc3545; }
+    .hdr-support { background: #fd7e14; }
+
+    .layer-body { padding: 6px 8px; background: #fafbfc; }
+    .box {
+      background: #fff;
+      border: 1px solid #dee2e6;
+      border-radius: 5px;
+      padding: 4px 6px;
+      margin-bottom: 4px;
+    }
+    .box:last-child { margin-bottom: 0; }
+    .box-title { font-weight: 700; font-size: 9px; color: #0d6efd; }
+    .box-path { font-family: Consolas, monospace; font-size: 7.5px; color: #6c757d; }
+    .box-desc { font-size: 8px; color: #495057; margin-top: 1px; }
+
+    .flow-row {
+      display: flex; align-items: center; justify-content: center;
+      gap: 4px; margin: 6px 0; flex-wrap: wrap;
+    }
+    .flow-box {
+      background: linear-gradient(135deg, #e7f1ff, #cfe2ff);
+      border: 1px solid #9ec5fe;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-weight: 600;
+      font-size: 8.5px;
+      text-align: center;
+      min-width: 72px;
+    }
+    .arrow { color: #0d6efd; font-size: 14px; font-weight: bold; }
+
+    .bottom-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .vapt-layer { opacity: 0.92; }
+    .vapt-layer .layer-body { background: #fff5f5; }
+    .badge-off {
+      display: inline-block;
+      background: #ffc107;
+      color: #664d03;
+      font-size: 7px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3px 8px;
+      font-size: 8px;
+    }
+    .feat { display: flex; gap: 4px; align-items: flex-start; }
+    .feat-ok { color: #198754; font-weight: bold; }
+    .feat-off { color: #adb5bd; }
+
+    footer {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px solid #dee2e6;
+      display: flex;
+      justify-content: space-between;
+      font-size: 7.5px;
+      color: #6c757d;
+    }
+    .output-tree {
+      font-family: Consolas, monospace;
+      font-size: 7px;
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 4px;
+      padding: 5px 7px;
+      line-height: 1.5;
+      white-space: pre;
+    }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <p class="no-print">
+      <strong>Print to PDF:</strong> Ctrl+P → Destination: Save as PDF → Layout: <strong>Landscape</strong> → Margins: Default → Scale: Fit to page
+    </p>
+
+    <header>
+      <div>
+        <h1>WebVac Architecture</h1>
+        <div class="subtitle">Dynamic browser crawler · Proxy rotation · CDN origin bypass · Multi-format reports</div>
+      </div>
+      <div class="meta">
+        <div><strong>Stack:</strong> Python 3.12 · asyncio · Patchright · aiohttp</div>
+        <div><strong>Mode:</strong> Scrape-only (VAPT pipeline built, disabled)</div>
+        <div><strong>Repo:</strong> D:\WebVac</div>
+      </div>
+    </header>
+
+    <!-- Main flow -->
+    <div class="flow-row">
+      <div class="flow-box">User / CLI<br><span style="font-weight:400;font-size:7px">run.py · scraper.py</span></div>
+      <span class="arrow">→</span>
+      <div class="flow-box">Setup<br><span style="font-weight:400;font-size:7px">proxies · browser pool</span></div>
+      <span class="arrow">→</span>
+      <div class="flow-box">BFS Crawl<br><span style="font-weight:400;font-size:7px">crawler.py</span></div>
+      <span class="arrow">→</span>
+      <div class="flow-box">Per-Page Scrape<br><span style="font-weight:400;font-size:7px">page_scrape_flow</span></div>
+      <span class="arrow">→</span>
+      <div class="flow-box">Extract &amp; Save<br><span style="font-weight:400;font-size:7px">storage.py</span></div>
+    </div>
+
+    <div class="grid-main">
+      <!-- Entry -->
+      <div class="layer">
+        <div class="layer-hdr hdr-entry">① Entry Layer</div>
+        <div class="layer-body">
+          <div class="box">
+            <div class="box-title">run.py</div>
+            <div class="box-path">Interactive menu launcher</div>
+            <div class="box-desc">Prompts for URL, mode, proxies, concurrency; spawns scraper subprocess.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">core/scraper.py</div>
+            <div class="box-path">CLI orchestrator</div>
+            <div class="box-desc">Parses args, resolves origin (CF-Hero), starts browser pool, runs crawl, persists output.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">config/config.py</div>
+            <div class="box-desc">Defaults: timeouts, concurrency, proxy strategy, VAPT flags.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Crawl -->
+      <div class="layer">
+        <div class="layer-hdr hdr-crawl">② Crawl Engine</div>
+        <div class="layer-body">
+          <div class="box">
+            <div class="box-title">core/crawler.py</div>
+            <div class="box-desc">BFS queue · depth/page limits · robots.txt · batch parallel scrape · link discovery.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">core/page_scrape_flow.py</div>
+            <div class="box-desc">goto → challenge wait → bot detect → retry / CF-Hero / evasion / CAPTCHA.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">scope/scope_manager.py</div>
+            <div class="box-desc">Allowed domains, include/exclude patterns, origin IP scope.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">core/pipeline.py</div>
+            <div class="box-desc">Optional user process_item() hooks on scraped data.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Browser -->
+      <div class="layer">
+        <div class="layer-hdr hdr-browser">③ Browser &amp; Evasion</div>
+        <div class="layer-body">
+          <div class="box">
+            <div class="box-title">utils/browser.py + browser_pool.py</div>
+            <div class="box-desc">Patchright Chromium · N isolated contexts · stealth scripts · per-slot proxy identity.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">utils/proxy.py</div>
+            <div class="box-desc">Latency-ranked pool · sticky sessions · cool-down on 429/timeouts.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">utils/detection.py</div>
+            <div class="box-desc">WAF/challenge page detection · JS challenge wait.</div>
+          </div>
+          <div class="box">
+            <div class="box-title">cf_hero.py · origin_probe.py</div>
+            <div class="box-desc">Discover real origin IP behind CDN · Host-header bypass · auto-fallback on bot block.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-grid">
+      <div>
+        <div class="grid-main" style="grid-template-columns: 1fr 1fr; margin-bottom: 0;">
+          <!-- Data -->
+          <div class="layer">
+            <div class="layer-hdr hdr-data">④ Data &amp; Output</div>
+            <div class="layer-body">
+              <div class="two-col">
+                <div class="box">
+                  <div class="box-title">data/html_parser.py</div>
+                  <div class="box-desc">HTML → links, forms, meta, headings, tables…</div>
+                </div>
+                <div class="box">
+                  <div class="box-title">data/page_record.py</div>
+                  <div class="box-desc">Builds per-page dict for reports &amp; BFS.</div>
+                </div>
+                <div class="box">
+                  <div class="box-title">data/storage.py</div>
+                  <div class="box-desc">JSON · CSV · HTML · SQLite · scan diffs.</div>
+                </div>
+                <div class="box">
+                  <div class="box-title">store/scan_session.py</div>
+                  <div class="box-desc">Versioned folder layout per target/scan.</div>
+                </div>
+                <div class="box">
+                  <div class="box-title">utils/asset_downloader.py</div>
+                  <div class="box-desc">PDFs &amp; source maps from discovered URLs.</div>
+                </div>
+                <div class="box">
+                  <div class="box-title">auth/auth.py</div>
+                  <div class="box-desc">Login flows · cookie session save/restore.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- VAPT -->
+          <div class="layer vapt-layer">
+            <div class="layer-hdr hdr-vapt">⑤ VAPT Pipeline <span class="badge-off">DISABLED</span></div>
+            <div class="layer-body">
+              <div class="box">
+                <div class="box-title">collectors/</div>
+                <div class="box-desc">HTTP, HTML, JS, network, storage capture during crawl.</div>
+              </div>
+              <div class="box">
+                <div class="box-title">analyzers/ + findings/</div>
+                <div class="box-desc">Headers, cookies, OAuth, GraphQL, secrets, misconfigs.</div>
+              </div>
+              <div class="box">
+                <div class="box-title">active/ + core/runner.py</div>
+                <div class="box-desc">Active probes (.git, .env, swagger) · post-crawl orchestration.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <footer>
+          <span>WebVac — Internal web scraper &amp; recon framework</span>
+          <span>Generate PDF: python scripts/generate_architecture_pdf.py</span>
+        </footer>
+      </div>
+
+      <div>
+        <div class="layer" style="margin-bottom: 8px;">
+          <div class="layer-hdr hdr-support">Output Layout</div>
+          <div class="layer-body">
+            <div class="output-tree">scraped_data/
+  &lt;domain&gt;_&lt;target_id&gt;/
+    scans/&lt;timestamp&gt;_&lt;scan_id&gt;/
+      scrape/   ← JSON, CSV, report.html
+      assets/   ← PDFs, sourcemaps, screenshots
+      meta/     ← session metadata
+      recon/    ← VAPT findings
+    diffs/      ← vs previous scan</div>
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-hdr hdr-support">Feature Status</div>
+          <div class="layer-body">
+            <div class="features">
+              <div class="feat"><span class="feat-ok">✓</span> BFS &amp; single-page crawl</div>
+              <div class="feat"><span class="feat-ok">✓</span> Concurrent context pool</div>
+              <div class="feat"><span class="feat-ok">✓</span> Proxy rotation</div>
+              <div class="feat"><span class="feat-ok">✓</span> CF-Hero origin bypass</div>
+              <div class="feat"><span class="feat-ok">✓</span> Bot/WAF evasion</div>
+              <div class="feat"><span class="feat-ok">✓</span> JSON/CSV/HTML reports</div>
+              <div class="feat"><span class="feat-ok">✓</span> Login &amp; sessions</div>
+              <div class="feat"><span class="feat-ok">✓</span> Scan history &amp; diffs</div>
+              <div class="feat"><span class="feat-off">○</span> VAPT collectors</div>
+              <div class="feat"><span class="feat-off">○</span> Active recon probes</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

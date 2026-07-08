@@ -48,6 +48,13 @@ from utils.robots import RobotsHandler
 from utils.proxy import ProxyManager
 from utils.screenshot import ScreenshotModule
 from core.pipeline import PipelineManager
+from store.scan_session import ScanSession
+from utils.asset_downloader import AssetDownloader, collect_pdf_urls
+from models.origin import OriginTarget
+from utils.origin_probe import validate_origin, fetch_vanity_title
+from utils.cf_hero import discover_origin, find_cf_hero_bin
+from utils.browser_pool import SlotIdentity
+from urllib.parse import urlparse
 
 init(autoreset=True)  # colorama
 
@@ -76,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--engine",
         choices=["dynamic", "lightweight"],
         default="dynamic",
-        help="Engine to use. dynamic uses Playwright, lightweight uses aiohttp. (default: dynamic)",
+        help="Engine to use. dynamic uses Patchright, lightweight uses aiohttp. (default: dynamic)",
     )
 
     # Crawl limits
@@ -90,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--wait-until",
         choices=["domcontentloaded", "load", "networkidle"],
         default=DEFAULT_CONFIG["wait_until"],
-        help="Playwright lifecycle event to wait for on page load. (default: networkidle)",
+        help="Patchright lifecycle event to wait for on page load. (default: domcontentloaded)",
     )
 
     # Login / Auth
@@ -140,12 +147,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--proxy-strategy",
-        choices=["random", "round_robin"],
-        default=DEFAULT_CONFIG["proxy_strategy"],
-        help="How to pick the next proxy from the pool. (default: random)",
-    )
-    p.add_argument(
         "--max-retries",
         type=int,
         default=DEFAULT_CONFIG["max_retries"],
@@ -156,6 +157,54 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_CONFIG["concurrency"],
         help="Number of pages to scrape in parallel (crawl mode). (default: 1)",
+    )
+
+    # Proxy rotation strategy
+    p.add_argument(
+        "--proxy-strategy",
+        choices=["latency", "random", "round_robin"],
+        default=DEFAULT_CONFIG["proxy_strategy"],
+        help="How to select the next proxy. 'latency' (default) benchmarks all proxies at startup and always picks the fastest.",
+    )
+
+    # Sticky sessions
+    p.add_argument(
+        "--sticky-requests",
+        type=int,
+        default=DEFAULT_CONFIG["sticky_requests"],
+        metavar="N",
+        help=(
+            "Number of successful requests to make on one proxy before voluntarily "
+            "rotating to the next. 0 disables sticky sessions. (default: 10)"
+        ),
+    )
+
+    # Proxy cool-down
+    p.add_argument(
+        "--cooldown-seconds",
+        type=float,
+        default=DEFAULT_CONFIG["proxy_cooldown_seconds"],
+        metavar="SECS",
+        help=(
+            "Seconds to put a proxy on cool-down after a 429 or timeout before "
+            "retrying it. (default: 300)"
+        ),
+    )
+
+    # Health-check
+    p.add_argument(
+        "--health-check-url",
+        default=DEFAULT_CONFIG["health_check_url"],
+        metavar="URL",
+        help=(
+            "URL used to benchmark proxies at startup. Must return JSON with an "
+            "'origin' or 'ip' key. (default: http://httpbin.org/ip)"
+        ),
+    )
+    p.add_argument(
+        "--no-health-check",
+        action="store_true",
+        help="Skip the proxy benchmark / health-check at startup.",
     )
 
     # Targeted Extraction
@@ -224,7 +273,211 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable automatic screenshots of CAPTCHA / bot-block pages.",
     )
 
+    # Manual CAPTCHA solver
+    p.add_argument(
+        "--no-captcha-prompt",
+        action="store_true",
+        help=(
+            "Disable the interactive manual CAPTCHA prompt. When set, WebVac will "
+            "skip the page instead of pausing to ask you to solve the CAPTCHA. "
+            "Use this flag in automated / CI environments."
+        ),
+    )
+
+    p.add_argument(
+        "--parent-scan-id",
+        default=None,
+        metavar="SCAN_ID",
+        help="Link this scan to a parent session (default: latest prior scan for target).",
+    )
+
+    p.add_argument(
+        "--allow-subdomains",
+        action="store_true",
+        help="Follow subdomains of the target during crawl.",
+    )
+
+    # Cloudflare origin bypass (CF-Hero)
+    p.add_argument(
+        "--origin-ip",
+        default=None,
+        metavar="IP",
+        help="Scrape via origin IP with Host header (bypass CDN edge).",
+    )
+    p.add_argument(
+        "--cf-hero",
+        action="store_true",
+        help="Run CF-Hero to discover origin IP before scraping (requires cf-hero on PATH).",
+    )
+    p.add_argument(
+        "--cf-hero-bin",
+        default=None,
+        metavar="PATH",
+        help="Path to cf-hero binary (default: search PATH).",
+    )
+    p.add_argument(
+        "--cf-hero-args",
+        default="",
+        metavar="ARGS",
+        help='Extra cf-hero flags as a string, e.g. "-shodan -censys".',
+    )
+    p.add_argument(
+        "--origin-title",
+        default=None,
+        metavar="TITLE",
+        help="Expected HTML title for origin validation (skips CDN title fetch).",
+    )
+    p.add_argument(
+        "--skip-origin-validate",
+        action="store_true",
+        help="Use origin IP without title validation (use responsibly).",
+    )
+    p.add_argument(
+        "--no-cf-hero-auto",
+        action="store_true",
+        help="Disable automatic CF-Hero origin discovery when bot/WAF blocks are detected.",
+    )
+
     return p
+
+
+_DEFAULT_SEC_CH_UA = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+
+
+def _proxy_to_identity(entry) -> SlotIdentity:
+    return SlotIdentity(
+        proxy=entry.to_patchright(),
+        ua=entry.pinned_ua or "",
+        platform=entry.pinned_platform or "Windows",
+        sec_ch_ua=entry.pinned_sec_ch_ua or _DEFAULT_SEC_CH_UA,
+    )
+
+
+def _assign_slot_proxies(proxy_manager, concurrency: int, first_entry=None) -> list:
+    """Pick one proxy per concurrent worker slot."""
+    entries = []
+    for i in range(concurrency):
+        if i == 0 and first_entry:
+            entries.append(first_entry)
+        elif proxy_manager:
+            entries.append(proxy_manager.get_next())
+        else:
+            entries.append(None)
+    return entries
+
+
+async def _resolve_origin_access(args, seed_url: str, proxy_url: str | None):
+    """Resolve OriginTarget from --origin-ip or --cf-hero."""
+    hostname = urlparse(seed_url).netloc
+    if not hostname:
+        print(f"{Fore.RED}[Origin] Invalid URL — no hostname{Style.RESET_ALL}")
+        return None
+
+    if args.origin_ip:
+        origin = OriginTarget(
+            hostname=hostname,
+            origin_ip=args.origin_ip.strip(),
+            source="manual",
+        )
+        if args.skip_origin_validate:
+            origin.validated = True
+            print(f"{Fore.CYAN}[Origin] Using manual IP {origin.origin_ip} (validation skipped){Style.RESET_ALL}")
+            return origin
+
+        title = args.origin_title or await fetch_vanity_title(seed_url, proxy=proxy_url)
+        origin.expected_title = title or ""
+        if await validate_origin(
+            origin, seed_url, expected_title=title, proxy=proxy_url,
+        ):
+            origin.validated = True
+            print(f"{Fore.GREEN}[Origin] Validated manual IP {origin.origin_ip}{Style.RESET_ALL}")
+            return origin
+        print(f"{Fore.YELLOW}[Origin] Manual IP {origin.origin_ip} failed title validation{Style.RESET_ALL}")
+        return None
+
+    if args.cf_hero:
+        if not find_cf_hero_bin(args.cf_hero_bin):
+            print(
+                f"{Fore.RED}[CF-Hero] cf-hero not found. Install: "
+                f"go install -v github.com/musana/cf-hero/cmd/cf-hero@latest{Style.RESET_ALL}"
+            )
+            return None
+        extra = [a for a in args.cf_hero_args.split() if a] if args.cf_hero_args else None
+        if args.origin_title:
+            extra = (extra or []) + ["-title", args.origin_title]
+        origin = await discover_origin(
+            seed_url,
+            hostname,
+            bin_path=args.cf_hero_bin,
+            extra_args=extra,
+            expected_title=args.origin_title or "",
+            proxy=proxy_url,
+            validate=not args.skip_origin_validate,
+        )
+        return origin
+
+    return None
+
+
+async def _persist_run(
+    args,
+    crawler,
+    results: list,
+    session_config: dict,
+    output_formats: list,
+    *,
+    interrupted: bool = False,
+) -> None:
+    """Download assets and write scrape output files."""
+    if not results:
+        print(f"\n{Fore.YELLOW}No data was collected.{Style.RESET_ALL}")
+        return
+
+    scan = crawler._scan if crawler else None
+    if scan:
+        ScanSession(args.output, scan).apply_parent_chain(args.parent_scan_id)
+
+    assets_meta: dict = {}
+    origin = session_config.get("origin_access")
+    if origin:
+        assets_meta["origin_access"] = origin
+    if scan:
+        sess = ScanSession(args.output, scan)
+        sess.ensure_dirs()
+        layout = sess.layout_paths()
+        if session_config.get("download_pdfs", True):
+            pdf_urls = collect_pdf_urls(results)
+            if pdf_urls:
+                dl = AssetDownloader(layout["assets_pdfs"])
+                proxy = session_config.get("_proxy_url")
+                pdf_results = await dl.download_pdfs(pdf_urls, proxy=proxy)
+                assets_meta["pdfs_downloaded"] = sum(
+                    1 for r in pdf_results if r.get("status") in ("ok", "cached")
+                )
+                assets_meta["pdf_results"] = pdf_results
+
+    storage = Storage(output_dir=args.output)
+    paths = storage.save(
+        results,
+        label=args.label,
+        formats=output_formats,
+        scan=scan,
+        interrupted=interrupted,
+        assets_meta=assets_meta,
+    )
+
+    label = "Partial save" if interrupted else "Success"
+    print(f"\n{Fore.GREEN}{label}: {len(results)} page(s) saved.{Style.RESET_ALL}")
+    for fmt, path in paths.items():
+        if fmt == "session_dir":
+            continue
+        print(f"  {fmt.upper():8s} -> {path}")
+    if scan:
+        print(f"\n{Fore.CYAN}Scan ID: {scan.scan_id}{Style.RESET_ALL}")
+        if scan.parent_scan_id:
+            print(f"  Parent:  {scan.parent_scan_id}")
+    if interrupted:
+        print(f"\n{Fore.YELLOW}Run was interrupted — open scrape/report.html for partial results.{Style.RESET_ALL}")
 
 
 async def run(args):
@@ -245,7 +498,6 @@ async def run(args):
 
     screenshots_enabled = not getattr(args, "no_screenshots", False)
     print(f"  Screenshots : {'enabled (CAPTCHA pages only)' if screenshots_enabled else 'disabled'}")
-    print(f"{'='*60}{Style.RESET_ALL}\n")
 
     # ── Output formats ────────────────────────────────────────────────────────
     _valid_formats = {"json", "csv", "markdown", "sqlite", "html"}
@@ -277,8 +529,11 @@ async def run(args):
     if args.proxy_file:
         try:
             proxy_manager = ProxyManager.from_file(
-                args.proxy_file, strategy=args.proxy_strategy,
+                args.proxy_file,
+                strategy=args.proxy_strategy,
                 max_failures=args.max_retries,
+                cooldown_seconds=args.cooldown_seconds,
+                max_cooldown_failures=DEFAULT_CONFIG["max_cooldown_failures"],
             )
         except Exception as exc:
             print(f"{Fore.RED}[Error] Could not load proxy file: {exc}{Style.RESET_ALL}")
@@ -287,8 +542,11 @@ async def run(args):
         proxy_list = [p.strip() for p in args.proxies.split(",") if p.strip()]
         try:
             proxy_manager = ProxyManager.from_strings(
-                proxy_list, strategy=args.proxy_strategy,
+                proxy_list,
+                strategy=args.proxy_strategy,
                 max_failures=args.max_retries,
+                cooldown_seconds=args.cooldown_seconds,
+                max_cooldown_failures=DEFAULT_CONFIG["max_cooldown_failures"],
             )
         except Exception as exc:
             print(f"{Fore.RED}[Error] Could not parse proxies: {exc}{Style.RESET_ALL}")
@@ -297,7 +555,33 @@ async def run(args):
     if proxy_manager:
         initial_proxy_entry = proxy_manager.get_next()
         if initial_proxy_entry:
-            initial_proxy_dict = initial_proxy_entry.to_playwright()
+            initial_proxy_dict = initial_proxy_entry.to_patchright()
+
+    # ── Proxy health-check / benchmark ────────────────────────────────────────
+    if proxy_manager and not getattr(args, "no_health_check", False):
+        health_url = getattr(args, "health_check_url", DEFAULT_CONFIG["health_check_url"])
+        await proxy_manager.benchmark_all(health_check_url=health_url)
+        # Re-pick initial proxy after benchmark (dead ones are now retired)
+        initial_proxy_entry = proxy_manager.get_next()
+        initial_proxy_dict  = initial_proxy_entry.to_patchright() if initial_proxy_entry else None
+
+
+    # ── Origin resolution (before browser — uses aiohttp / cf-hero CLI) ───────
+    proxy_url = initial_proxy_entry.server if initial_proxy_entry else None
+    origin_target = None
+    if args.origin_ip or args.cf_hero:
+        try:
+            origin_target = await _resolve_origin_access(args, args.url, proxy_url)
+        except Exception as exc:
+            print(f"{Fore.RED}[Origin] Setup failed: {exc}{Style.RESET_ALL}")
+            return
+        if not origin_target:
+            print(f"{Fore.RED}[Origin] No validated origin — aborting.{Style.RESET_ALL}")
+            return
+        print(
+            f"{Fore.CYAN}[Origin] Scraping {origin_target.hostname} via "
+            f"{origin_target.origin_ip} ({origin_target.source}){Style.RESET_ALL}"
+        )
 
     # ── Browser ───────────────────────────────────────────────────────────────
     browser = BrowserManager(
@@ -306,7 +590,19 @@ async def run(args):
         rotate_geolocation=DEFAULT_CONFIG["rotate_geolocation"],
         rotate_viewport=DEFAULT_CONFIG["rotate_viewport"],
     )
-    await browser.start(proxy=initial_proxy_dict)
+    resolver = origin_target.host_resolver_rule() if origin_target else None
+    slot_entries = _assign_slot_proxies(
+        proxy_manager, args.concurrency, initial_proxy_entry,
+    )
+    slot_identities = [
+        _proxy_to_identity(e) if e else SlotIdentity()
+        for e in slot_entries
+    ]
+    await browser.start(
+        host_resolver_rules=resolver,
+        pool_size=args.concurrency,
+        slot_identities=slot_identities,
+    )
 
     try:
         # ── Session restore (skips re-login if cookie file exists) ───────────
@@ -364,6 +660,21 @@ async def run(args):
 
         pipeline_manager = PipelineManager(args.pipeline_file) if args.pipeline_file else None
 
+        session_config = dict(DEFAULT_CONFIG)
+        session_config["max_depth"] = args.depth
+        session_config["max_pages"] = args.max_pages
+        session_config["cf_hero_auto_fallback"] = not args.no_cf_hero_auto
+        session_config["cf_hero_bin"] = args.cf_hero_bin
+        session_config["cf_hero_args"] = args.cf_hero_args
+        if args.origin_title:
+            session_config["origin_title"] = args.origin_title
+        if initial_proxy_entry:
+            session_config["_proxy_url"] = initial_proxy_entry.server
+        if args.allow_subdomains:
+            session_config["allow_subdomains"] = True
+        if origin_target:
+            session_config["origin_access"] = origin_target.to_dict()
+
         crawler = Crawler(
             browser=browser,
             max_depth=args.depth,
@@ -384,30 +695,39 @@ async def run(args):
             deny_url_regex=args.deny_url_regex,
             pipeline_manager=pipeline_manager,
             engine=args.engine,
+            captcha_prompt_enabled=not args.no_captcha_prompt,
+            sticky_requests=args.sticky_requests,
+            recon_config=session_config,
         )
 
-        # Tell the crawler which proxy is currently wired into the browser
-        if initial_proxy_entry:
-            crawler._current_proxy = initial_proxy_entry
+        crawler.init_slot_proxies(slot_entries)
 
-        if args.mode == "single":
-            results = await crawler.scrape_single(args.url)
-        else:
-            results = await crawler.scrape_site(args.url)
+        interrupted = False
+        results: list = []
+        try:
+            if args.mode == "single":
+                results = await crawler.scrape_single(args.url)
+            else:
+                results = await crawler.scrape_site(args.url)
+        except KeyboardInterrupt:
+            interrupted = True
+            results = crawler.partial_results
+            print(
+                f"\n{Fore.YELLOW}[Scraper] Interrupted — saving "
+                f"{len(results)} partial result(s)...{Style.RESET_ALL}"
+            )
 
-        # ── Save ──────────────────────────────────────────────────────────────
-        if results:
-            storage = Storage(output_dir=args.output)
-            paths = storage.save(results, label=args.label, formats=output_formats)
-            print(f"\n{Fore.GREEN}Success: Scrape complete! {len(results)} page(s) saved.{Style.RESET_ALL}")
-            for fmt, path in paths.items():
-                print(f"  {fmt.upper():8s} -> {path}")
-        else:
-            print(f"\n{Fore.YELLOW}No data was collected.{Style.RESET_ALL}")
+        await _persist_run(
+            args,
+            crawler,
+            results,
+            session_config,
+            output_formats,
+            interrupted=interrupted,
+        )
 
     finally:
         await browser.stop()
-
 
 def main():
     parser = build_parser()

@@ -76,6 +76,17 @@ BLOCKED_BODY_PATTERNS: list[str] = [
 # HTTP status codes that indicate blocking / rate-limiting
 BLOCKED_STATUS_CODES: set[int] = {403, 429, 503}
 
+# Transient markers — page may clear after JS challenge (wait before flagging as blocked)
+CF_CHALLENGE_MARKERS: list[str] = [
+    "just a moment",
+    "checking your browser",
+    "cf-challenge",
+    "__cf_chl",
+    "challenge-form",
+    "cf-turnstile",
+    "turnstile",
+]
+
 
 # ── Detection function ────────────────────────────────────────────────────────
 
@@ -90,7 +101,7 @@ async def is_bot_detected(page, response=None) -> bool:
       4. Raw HTML body               (most expensive — full page content)
 
     Args:
-        page:     A Playwright/Patchright ``Page`` object.
+        page:     A Patchright ``Page`` object.
         response: The ``Response`` object returned by ``page.goto()``, or None.
 
     Returns:
@@ -132,6 +143,43 @@ async def is_bot_detected(page, response=None) -> bool:
         pass
 
     return False
+
+
+async def is_challenge_in_progress(page) -> bool:
+    """True when HTML looks like an in-flight JS challenge (e.g. Cloudflare)."""
+    try:
+        title = (await page.title()).lower()
+        body = (await page.content()).lower()
+    except Exception:
+        return False
+    for marker in CF_CHALLENGE_MARKERS:
+        if marker in title or marker in body:
+            return True
+    return False
+
+
+async def wait_for_challenge_resolution(
+    page,
+    *,
+    timeout_ms: int = 45_000,
+    poll_ms: int = 500,
+) -> bool:
+    """
+    Poll until challenge markers disappear or timeout.
+    Returns True if the page no longer looks like an active challenge.
+    """
+    import asyncio
+    import time
+
+    if not await is_challenge_in_progress(page):
+        return True
+
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while time.monotonic() < deadline:
+        await asyncio.sleep(poll_ms / 1000.0)
+        if not await is_challenge_in_progress(page):
+            return True
+    return not await is_challenge_in_progress(page)
 
 
 def is_bot_detected_sync(url: str, title: str, body: str, status: int | None = None) -> bool:

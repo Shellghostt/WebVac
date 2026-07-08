@@ -1,25 +1,21 @@
 """
 storage.py — Save scraped data to JSON, CSV, Markdown, SQLite, and HTML.
 
-Folder structure:
-    scraped_data/
-        <slug>/                         ← per-site folder
-            <timestamp>/                ← per-session folder
-                data.json
-                data.csv
-                report.md
-                report.html             ← beautiful interactive HTML report
-                data.db
-            diffs/
-                diff_<timestamp>.json
-                diff_<timestamp>.md
+Folder structure (v2.2 historical layout):
 
-Supported formats (pass as a list to save()):
-    json      — Full nested data, pretty-printed.
-    csv       — Flattened rows; nested fields are JSON-stringified.
-    markdown  — Human-readable document with tables and sections per page.
-    sqlite    — SQLite DB with scalar columns + JSON blobs; queryable.
-    html      — Beautiful interactive single-file HTML report.
+    scraped_data/
+        <domain>_<target_id>/
+            scans/
+                <YYYYMMDD_HHMMSS>_<scan_id>/
+                    scrape/     report.html, data.json, ...
+                    recon/      findings, intelligence, recon reports
+                    artifacts/  artifacts.json
+                    assets/     pdfs/, sourcemaps/, screenshots/
+                    meta/       session.json, meta.json
+            diffs/
+                diff_<session_name>.json
+
+Legacy fallback (no scan metadata): scraped_data/<slug>/<timestamp>/
 """
 
 import json
@@ -27,7 +23,12 @@ import csv
 import os
 import sqlite3
 from datetime import datetime
+from typing import Any, Optional
 from urllib.parse import urlparse
+
+from data.recon_report import ReconReportWriter
+from models.scan import ScanMetadata
+from store.scan_session import ScanSession
 
 
 # Fields stored as dedicated SQLite columns for easy SQL querying
@@ -51,55 +52,137 @@ class Storage:
         data: list[dict],
         label: str = None,
         formats: list[str] = None,
+        recon: Optional[dict[str, Any]] = None,
+        artifact_store=None,
+        scan: Optional[ScanMetadata] = None,
+        *,
+        interrupted: bool = False,
+        assets_meta: Optional[dict[str, Any]] = None,
     ) -> dict:
         """
         Save a list of page dicts in the requested formats.
         Returns a dict mapping format name → saved file path.
-
-        Args:
-            data:    List of page dicts from the extractor.
-            label:   Custom filename prefix (default: domain slug).
-            formats: Which formats to write. Valid values:
-                     "json", "csv", "markdown", "sqlite", "html".
-                     Defaults to ["json", "csv", "html"].
         """
-        if not data:
+        if not data and recon is None and artifact_store is None:
             print("[Storage] No data to save.")
             return {}
 
-        formats = formats or ["json", "csv", "html"]
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        slug = label or self._url_slug(data[0].get("url", "scrape"))
+        formats = formats or (["json", "csv", "html"] if data else [])
+        slug = label or (self._url_slug(data[0].get("url", "scrape")) if data else (scan.target.domain if scan else "scrape"))
+        report_ts_fmt = self._report_ts_fmt(scan)
 
-        # ── Build per-site / per-session directory ────────────────────────────
-        site_dir    = os.path.join(self.output_dir, slug)
-        session_dir = os.path.join(site_dir, timestamp)
-        diffs_dir   = os.path.join(site_dir, "diffs")
-        os.makedirs(session_dir, exist_ok=True)
-        os.makedirs(diffs_dir,   exist_ok=True)
+        if scan:
+            session = ScanSession(self.output_dir, scan)
+            session.ensure_dirs()
+            layout = session.layout_paths()
+            session_dir = session.session_dir
+            scrape_dir = layout["scrape"]
+            recon_dir = layout["recon"]
+            meta_dir = layout["meta"]
+            artifacts_dir = layout["artifacts"]
+            site_dir = session.target_dir
+            diffs_dir = session.diffs_dir
+            session_key = session.session_name
+            paths: dict[str, str] = {
+                "meta": session.write_meta(
+                    slug,
+                    interrupted=interrupted,
+                    origin_access=(assets_meta or {}).get("origin_access"),
+                ),
+            }
+        else:
+            session_key = datetime.now().strftime("%Y%m%d_%H%M%S")
+            site_dir = os.path.join(self.output_dir, slug)
+            session_dir = os.path.join(site_dir, session_key)
+            scrape_dir = session_dir
+            recon_dir = session_dir
+            meta_dir = session_dir
+            artifacts_dir = session_dir
+            diffs_dir = os.path.join(site_dir, "diffs")
+            os.makedirs(session_dir, exist_ok=True)
+            os.makedirs(diffs_dir, exist_ok=True)
+            paths = {}
 
-        # ── Compute sequential scan differences ───────────────────────────────
-        self._generate_diff(data, slug, timestamp, site_dir, diffs_dir)
+        self._generate_diff(
+            data or [], slug, session_key, site_dir, diffs_dir,
+            recon=recon, report_ts_fmt=report_ts_fmt,
+        )
 
         _writers = {
-            "json":     lambda d, _: self._save_json(d, session_dir),
-            "csv":      lambda d, _: self._save_csv(d, session_dir),
-            "markdown": lambda d, _: self._save_markdown(d, session_dir, slug, timestamp),
-            "sqlite":   lambda d, _: self._save_sqlite(d, session_dir, slug),
-            "html":     lambda d, _: self._save_html(d, session_dir, slug, timestamp),
+            "json":     lambda d, _: self._save_json(d, scrape_dir),
+            "csv":      lambda d, _: self._save_csv(d, scrape_dir),
+            "markdown": lambda d, _: self._save_markdown(d, scrape_dir, slug, report_ts_fmt),
+            "sqlite":   lambda d, _: self._save_sqlite(d, scrape_dir, slug),
+            "html":     lambda d, _: self._save_html(
+                d, scrape_dir, slug, report_ts_fmt,
+                recon=recon, interrupted=interrupted, assets_meta=assets_meta,
+            ),
         }
 
-        paths: dict[str, str] = {}
         for fmt in formats:
             writer = _writers.get(fmt)
             if writer:
                 paths[fmt] = writer(data, None)
 
-        print(f"\n[Storage] Saved {len(data)} page(s) -> {session_dir}")
+        if recon:
+            writer = ReconReportWriter(self._esc)
+            paths["recon_json"] = writer.save_json(recon, recon_dir)
+            paths["recon_html"] = writer.save_html(recon, data, recon_dir, slug, session_key)
+            if "markdown" in formats:
+                paths["recon_md"] = writer.save_markdown(recon, recon_dir, slug)
+            paths["intelligence"] = self._write_json_file(
+                os.path.join(recon_dir, "intelligence.json"),
+                recon.get("intelligence", []),
+            )
+            paths["findings"] = self._write_json_file(
+                os.path.join(recon_dir, "findings.json"),
+                recon.get("findings", []),
+            )
+            paths["session"] = self._write_json_file(
+                os.path.join(meta_dir, "session.json"),
+                {
+                    "session": recon.get("session"),
+                    "scope": recon.get("scope"),
+                    "endpoint_graph": recon.get("endpoint_graph"),
+                    "findings_count": recon.get("findings_count"),
+                    "active_recon": recon.get("active_recon"),
+                    "technology_profile": recon.get("technology_profile"),
+                    "interrupted": interrupted,
+                },
+            )
+
+        if artifact_store is not None:
+            paths["artifacts"] = artifact_store.persist(
+                os.path.join(artifacts_dir, "artifacts.json")
+            )
+
+        paths["session_dir"] = session_dir
+
+        saved = f"{len(data)} page(s)" if data else "session"
+        status = " (partial — interrupted)" if interrupted else ""
+        print(f"\n[Storage] Saved {saved}{status} -> {session_dir}")
         for fmt, path in paths.items():
+            if fmt == "session_dir":
+                continue
             rel = os.path.relpath(path, self.output_dir)
             print(f"  {fmt.upper():8s} -> {rel}")
         return paths
+
+    @staticmethod
+    def _report_ts_fmt(scan: Optional[ScanMetadata]) -> str:
+        if scan and scan.started_at:
+            try:
+                dt = datetime.fromisoformat(scan.started_at.replace("Z", "+00:00"))
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _write_json_file(path: str, data: Any) -> str:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return path
 
     # ── JSON ──────────────────────────────────────────────────────────────────
 
@@ -149,10 +232,9 @@ class Storage:
 
     # ── Markdown ──────────────────────────────────────────────────────────────
 
-    def _save_markdown(self, data: list[dict], session_dir: str, slug: str, timestamp: str) -> str:
+    def _save_markdown(self, data: list[dict], session_dir: str, slug: str, ts_fmt: str) -> str:
         """Generate a readable Markdown document — one section per scraped page."""
         path = os.path.join(session_dir, "report.md")
-        ts_fmt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
         lines: list[str] = [
             f"# WebVac Report — `{slug}`\n",
             f"*{len(data)} page(s) · generated {ts_fmt}*\n",
@@ -340,10 +422,22 @@ class Storage:
 
     # ── HTML Report ───────────────────────────────────────────────────────────
 
-    def _save_html(self, data: list[dict], session_dir: str, slug: str, timestamp: str) -> str:
+    def _save_html(
+        self,
+        data: list[dict],
+        session_dir: str,
+        slug: str,
+        ts_fmt: str,
+        recon: Optional[dict[str, Any]] = None,
+        *,
+        interrupted: bool = False,
+        assets_meta: Optional[dict[str, Any]] = None,
+    ) -> str:
         """Generate a self-contained, beautiful interactive HTML report."""
         path = os.path.join(session_dir, "report.html")
-        ts_fmt = datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%B %d, %Y at %H:%M:%S")
+        assets_meta = assets_meta or {}
+        pdf_count = assets_meta.get("pdfs_downloaded", 0)
+        sm_count = assets_meta.get("sourcemaps_exported", 0)
 
         total   = len(data)
         success = sum(1 for p in data if p.get("status", "success") == "success")
@@ -351,6 +445,32 @@ class Storage:
         total_words = sum(p.get("word_count", 0) for p in data)
         total_links = sum(len(p.get("links", [])) for p in data)
         total_images = sum(len(p.get("images", [])) for p in data)
+
+        recon_banner = self._recon_dashboard_banner(recon) if recon else ""
+        interrupt_banner = ""
+        if interrupted:
+            interrupt_banner = """
+      <div class="interrupt-banner">
+        <strong>⚠ Scan interrupted</strong> — partial results saved from pages completed before Ctrl+C.
+      </div>"""
+        assets_banner = ""
+        if pdf_count or sm_count:
+            assets_banner = f"""
+      <div class="assets-banner">
+        <div class="assets-title">📦 Collected Assets</div>
+        <div class="assets-pills">
+          {"<span class='asset-pill'>📄 " + str(pdf_count) + " PDF(s)</span>" if pdf_count else ""}
+          {"<span class='asset-pill'>🗺 " + str(sm_count) + " source map(s)</span>" if sm_count else ""}
+        </div>
+        <div class="assets-hint">See <code>assets/pdfs/</code> and <code>assets/sourcemaps/</code> in this scan folder.</div>
+      </div>"""
+        recon_nav = ""
+        if recon:
+            recon_nav = """
+            <a href="../recon/recon_report.html" class="nav-item" target="_blank">
+                <span class="nav-dot" style="background:var(--warn);box-shadow:0 0 6px var(--warn)"></span>
+                <span class="nav-title">🔒 VAPT Recon Report</span>
+            </a>"""
 
         # ── Sidebar nav items ─────────────────────────────────────────────────
         nav_items = ""
@@ -459,6 +579,23 @@ class Storage:
                     creds_html += f"<div class='cred-item'><b>{self._esc(c.get('service',''))}</b> — user: <code>{self._esc(c.get('username',''))}</code> / pass: <code>{self._esc(c.get('password',''))}</code></div>"
                 creds_html += "</div></div>"
 
+            # Forms table
+            forms_html = ""
+            if forms:
+                form_rows = ""
+                for form in forms:
+                    fields = form.get("fields") or []
+                    fnames = ", ".join(f.get("name") or f.get("type", "?") for f in fields[:5])
+                    form_rows += (
+                        f"<tr><td>{self._esc(form.get('method','GET'))}</td>"
+                        f"<td>{self._esc(form.get('action',''))}</td>"
+                        f"<td>{self._esc(fnames)}</td></tr>"
+                    )
+                forms_html = (
+                    "<table class='link-table'><thead><tr><th>Method</th><th>Action</th>"
+                    f"<th>Fields</th></tr></thead><tbody>{form_rows}</tbody></table>"
+                )
+
             # Meta / OG / TC accordion
             meta_rows = "".join(f"<tr><td>{self._esc(k)}</td><td>{self._esc(str(v))}</td></tr>" for k,v in meta.items() if v)
             og_rows   = "".join(f"<tr><td>{self._esc(k)}</td><td>{self._esc(str(v))}</td></tr>" for k,v in og.items() if v)
@@ -493,6 +630,7 @@ class Storage:
                     <button class="tab-btn active" onclick="switchTab(this, 'content-{i}')">Content</button>
                     <button class="tab-btn" onclick="switchTab(this, 'links-{i}')">Links ({len(links)})</button>
                     <button class="tab-btn" onclick="switchTab(this, 'images-{i}')">Images ({len(images)})</button>
+                    {"<button class='tab-btn' onclick=\"switchTab(this, 'forms-" + str(i) + "')\">Forms (" + str(len(forms)) + ")</button>" if forms else ""}
                     <button class="tab-btn" onclick="switchTab(this, 'meta-{i}')">Meta / SEO</button>
                     {"<button class='tab-btn' onclick=\"switchTab(this, 'contact-{i}')\">Contact</button>" if (emails or phones or social) else ""}
                 </div>
@@ -510,6 +648,8 @@ class Storage:
                 <div class="tab-panel hidden" id="images-{i}">
                     {imgs_html if imgs_html else "<p class='empty-msg'>No images found.</p>"}
                 </div>
+
+                {"<div class='tab-panel hidden' id='forms-" + str(i) + "'>" + forms_html + "</div>" if forms else ""}
 
                 <div class="tab-panel hidden" id="meta-{i}">
                     {"<div class='section-label'>Meta Tags</div><table class='meta-table'><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody>" + meta_rows + "</tbody></table>" if meta_rows else ""}
@@ -531,21 +671,21 @@ class Storage:
   /* ── Reset & Base ─────────────────────────────────────────────────── */
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
-    --bg:       #0f1117;
-    --surface:  #181c24;
-    --surface2: #1e2330;
-    --border:   #2a2f3e;
-    --accent:   #4f8ef7;
-    --accent2:  #7c5cbf;
-    --ok:       #22c55e;
-    --fail:     #ef4444;
-    --warn:     #f59e0b;
-    --text:     #e2e8f0;
-    --muted:    #6b7280;
+    --bg:       #0a0e14;
+    --surface:  #121820;
+    --surface2: #1a2230;
+    --border:   #2d3748;
+    --accent:   #00d4aa;
+    --accent2:  #ff6b4a;
+    --ok:       #34d399;
+    --fail:     #f87171;
+    --warn:     #fbbf24;
+    --text:     #e8edf4;
+    --muted:    #7a8a9e;
     --font:     'Segoe UI', system-ui, -apple-system, sans-serif;
     --mono:     'Cascadia Code', 'Fira Code', 'Courier New', monospace;
     --radius:   12px;
-    --shadow:   0 4px 24px rgba(0,0,0,0.4);
+    --shadow:   0 4px 24px rgba(0,0,0,0.45);
   }}
   html {{ scroll-behavior: smooth; }}
   body {{
@@ -561,7 +701,7 @@ class Storage:
 
   /* ── Top Bar ────────────────────────────────────────────────────────── */
   .topbar {{
-    background: linear-gradient(90deg, #0f1117 0%, #181c24 100%);
+    background: linear-gradient(90deg, #0a0e14 0%, #121820 50%, #0f1a24 100%);
     border-bottom: 1px solid var(--border);
     padding: 14px 28px;
     display: flex;
@@ -572,7 +712,7 @@ class Storage:
   }}
   .topbar-logo {{
     font-size: 20px; font-weight: 800; letter-spacing: -0.5px;
-    background: linear-gradient(135deg, #4f8ef7, #a78bfa);
+    background: linear-gradient(135deg, #00d4aa, #ff6b4a);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }}
   .topbar-sep {{ flex: 1; }}
@@ -618,7 +758,7 @@ class Storage:
     white-space: nowrap; overflow: hidden;
   }}
   .nav-item:hover {{ background: var(--surface2); color: var(--text); }}
-  .nav-item.active {{ background: rgba(79,142,247,0.12); border-color: rgba(79,142,247,0.3); color: var(--accent); }}
+  .nav-item.active {{ background: rgba(0,212,170,0.12); border-color: rgba(0,212,170,0.35); color: var(--accent); }}
   .nav-dot {{ width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }}
   .dot-ok   {{ background: var(--ok); box-shadow: 0 0 6px var(--ok); }}
   .dot-fail {{ background: var(--fail); box-shadow: 0 0 6px var(--fail); }}
@@ -647,7 +787,7 @@ class Storage:
   .stat-ok   .stat-val {{ color: var(--ok); }}
   .stat-fail .stat-val {{ color: var(--fail); }}
   .stat-blue .stat-val {{ color: var(--accent); }}
-  .stat-purple .stat-val {{ background: linear-gradient(135deg, #4f8ef7, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
+  .stat-purple .stat-val {{ background: linear-gradient(135deg, #00d4aa, #ff6b4a); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
 
   /* pages index table */
   .dash-table-wrap {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }}
@@ -719,7 +859,7 @@ class Storage:
   .link-table {{ width: 100%; border-collapse: collapse; font-size: 12.5px; background: var(--surface2); border-radius: 10px; overflow: hidden; margin-bottom: 16px; }}
   .link-table th {{ padding: 8px 12px; text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; background: var(--surface); }}
   .link-table td {{ padding: 7px 12px; border-top: 1px solid var(--border); word-break: break-all; }}
-  .link-table tr:hover td {{ background: rgba(79,142,247,0.05); }}
+  .link-table tr:hover td {{ background: rgba(0,212,170,0.06); }}
   .link-text {{ color: var(--text); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
   .link-url  {{ color: var(--accent); }}
   .link-url a {{ color: inherit; text-decoration: none; }}
@@ -738,7 +878,7 @@ class Storage:
   .meta-table th {{ padding: 8px 12px; text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; background: var(--surface); }}
   .meta-table td {{ padding: 7px 12px; border-top: 1px solid var(--border); word-break: break-word; }}
   .meta-table td:first-child {{ color: var(--muted); white-space: nowrap; width: 160px; }}
-  .meta-table tr:hover td {{ background: rgba(79,142,247,0.05); }}
+  .meta-table tr:hover td {{ background: rgba(0,212,170,0.06); }}
 
   /* contact */
   .contact-grid {{ display: flex; flex-wrap: wrap; gap: 8px; }}
@@ -768,6 +908,67 @@ class Storage:
     .page-header {{ flex-direction: column; }}
     .stats-grid {{ grid-template-columns: repeat(2, 1fr); }}
   }}
+
+  /* recon banner on scrape dashboard */
+  .recon-banner {{
+    background: linear-gradient(135deg, rgba(0,212,170,0.1), rgba(255,107,74,0.08));
+    border: 1px solid rgba(0,212,170,0.35);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }}
+  .recon-banner-title {{ font-weight: 700; font-size: 14px; }}
+  .recon-banner a {{
+    margin-left: auto;
+    padding: 8px 16px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 8px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+  }}
+  .recon-sev-pills {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+  .recon-pill {{
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+  }}
+  .interrupt-banner {{
+    background: rgba(251,191,36,0.12);
+    border: 1px solid rgba(251,191,36,0.45);
+    border-radius: var(--radius);
+    padding: 12px 18px;
+    margin-bottom: 16px;
+    color: var(--warn);
+    font-size: 13px;
+  }}
+  .assets-banner {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 20px;
+  }}
+  .assets-title {{ font-weight: 700; margin-bottom: 8px; }}
+  .assets-pills {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }}
+  .asset-pill {{
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    background: rgba(0,212,170,0.12);
+    border: 1px solid rgba(0,212,170,0.3);
+    color: var(--accent);
+  }}
+  .assets-hint {{ font-size: 11px; color: var(--muted); }}
+  .assets-hint code {{ background: var(--surface2); padding: 2px 6px; border-radius: 4px; }}
 </style>
 </head>
 <body>
@@ -793,6 +994,7 @@ class Storage:
         <span class="nav-dot" style="background:var(--accent);box-shadow:0 0 6px var(--accent)"></span>
         <span class="nav-title">📊 Overview Dashboard</span>
       </a>
+      {recon_nav}
       {nav_items}
     </div>
   </div>
@@ -804,6 +1006,10 @@ class Storage:
     <div id="dashboard">
       <div class="dash-title">Scrape Report</div>
       <div class="dash-sub">Site: <strong>{self._esc(slug)}</strong> &nbsp;·&nbsp; {self._esc(ts_fmt)}</div>
+
+      {interrupt_banner}
+      {recon_banner}
+      {assets_banner}
 
       <div class="stats-grid">
         <div class="stat-card stat-purple">
@@ -830,6 +1036,8 @@ class Storage:
           <div class="stat-val">{total_images:,}</div>
           <div class="stat-lbl">Total Images</div>
         </div>
+        {"<div class='stat-card stat-blue'><div class='stat-val'>" + str(pdf_count) + "</div><div class='stat-lbl'>PDFs Saved</div></div>" if pdf_count else ""}
+        {"<div class='stat-card stat-blue'><div class='stat-val'>" + str(sm_count) + "</div><div class='stat-lbl'>Source Maps</div></div>" if sm_count else ""}
       </div>
 
       <div class="dash-table-wrap">
@@ -975,26 +1183,82 @@ class Storage:
         domain = parsed.netloc.replace("www.", "").replace(".", "_")
         return domain[:40] if domain else "scrape"
 
+    def _recon_dashboard_banner(self, recon: dict[str, Any]) -> str:
+        fc = recon.get("findings_count") or {}
+        total_findings = sum(fc.values())
+        pills = ""
+        for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
+            if fc.get(sev):
+                pills += f'<span class="recon-pill">{sev}: {fc[sev]}</span>'
+        obs = recon.get("observations_count", 0)
+        mode = recon.get("session", {}).get("mode", "passive")
+        return f"""
+      <div class="recon-banner">
+        <div>
+          <div class="recon-banner-title">🔒 VAPT Recon — {total_findings} finding(s) · {obs} observations · {self._esc(mode)} mode</div>
+          <div class="recon-sev-pills" style="margin-top:8px">{pills}</div>
+        </div>
+        <a href="../recon/recon_report.html" target="_blank">Open Full Recon Report →</a>
+      </div>"""
+
+    def _list_prior_sessions(self, site_dir: str, current_key: str) -> list[str]:
+        if not os.path.isdir(site_dir):
+            return []
+        scans_root = os.path.join(site_dir, "scans")
+        if os.path.isdir(scans_root):
+            sessions = [
+                name
+                for name in os.listdir(scans_root)
+                if name != current_key
+                and os.path.isdir(os.path.join(scans_root, name))
+            ]
+            base = scans_root
+        else:
+            sessions = [
+                name
+                for name in os.listdir(site_dir)
+                if name != current_key
+                and name != "diffs"
+                and os.path.isdir(os.path.join(site_dir, name))
+            ]
+            base = site_dir
+
+        def _started_at(session_name: str) -> str:
+            for rel in ("meta/meta.json", "meta.json", "meta/session.json", "session.json"):
+                path = os.path.join(base, session_name, rel)
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if rel.endswith("meta.json"):
+                        return data.get("started_at", session_name)
+                    return (data.get("session") or {}).get("started_at", session_name)
+                except Exception:
+                    pass
+            return session_name
+
+        sessions.sort(key=_started_at)
+        return sessions
+
     def _generate_diff(
         self,
         current_data: list[dict],
         slug: str,
-        timestamp: str,
+        session_key: str,
         site_dir: str,
         diffs_dir: str,
+        recon: Optional[dict[str, Any]] = None,
+        report_ts_fmt: str = "",
     ) -> None:
         """
-        Scan site_dir for the most recent historical session for the same slug,
-        compute changes (new, removed, modified, failures), and save report inside diffs/
+        Compare against the most recent prior session under site_dir (target or slug).
         """
-        # Find previous sessions: they are subdirectories (timestamps)
-        history_sessions = sorted([
-            d for d in os.listdir(site_dir)
-            if os.path.isdir(os.path.join(site_dir, d)) and d != timestamp and d != "diffs"
-        ])
+        history_sessions = self._list_prior_sessions(site_dir, session_key)
 
-        diff_json_path = os.path.join(diffs_dir, f"diff_{timestamp}.json")
-        diff_md_path   = os.path.join(diffs_dir, f"diff_{timestamp}.md")
+        display_time = report_ts_fmt or session_key
+        diff_json_path = os.path.join(diffs_dir, f"diff_{session_key}.json")
+        diff_md_path   = os.path.join(diffs_dir, f"diff_{session_key}.md")
 
         curr_total   = len(current_data)
         curr_success = sum(1 for p in current_data if p.get("status", "success") == "success")
@@ -1002,15 +1266,17 @@ class Storage:
 
         if not history_sessions:
             report = {
-                "site": slug, "scan_time": timestamp, "first_run": True,
-                "summary": {"total_pages": curr_total, "success": curr_success, "failed": curr_failed}
+                "site": slug, "scan_id": session_key, "scan_time": display_time, "first_run": True,
+                "summary": {"total_pages": curr_total, "success": curr_success, "failed": curr_failed},
             }
+            if recon:
+                report["recon"] = self._recon_diff_summary(recon)
             with open(diff_json_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2)
 
             md = f"""# WebVac Scan Diff — `{slug}`
 
-*Generated on {timestamp} (Initial Run)*
+*Generated on {display_time} (Initial Run)*
 
 ## Scan Overview
 
@@ -1027,7 +1293,13 @@ class Storage:
 
         # Load previous session's data.json
         prev_session = history_sessions[-1]
-        prev_json = os.path.join(site_dir, prev_session, "data.json")
+        scans_root = os.path.join(site_dir, "scans")
+        if os.path.isdir(scans_root):
+            prev_json = os.path.join(scans_root, prev_session, "scrape", "data.json")
+            prev_recon_base = os.path.join(scans_root, prev_session, "recon")
+        else:
+            prev_json = os.path.join(site_dir, prev_session, "data.json")
+            prev_recon_base = os.path.join(site_dir, prev_session)
         try:
             with open(prev_json, encoding="utf-8") as f:
                 prev_data = json.load(f)
@@ -1074,7 +1346,7 @@ class Storage:
         ]
 
         report = {
-            "site": slug, "scan_time": timestamp, "first_run": False,
+            "site": slug, "scan_id": session_key, "scan_time": display_time, "first_run": False,
             "previous_scan": {"session": prev_session, "total_pages": prev_total, "success": prev_success, "failed": prev_failed},
             "current_scan":  {"total_pages": curr_total, "success": curr_success, "failed": curr_failed},
             "diff": {
@@ -1082,8 +1354,26 @@ class Storage:
                 "modified_count": len(modified),
                 "added": list(added_urls), "removed": list(removed_urls),
                 "modified": modified, "failures": failures,
-            }
+            },
         }
+        if recon:
+            report["recon"] = self._recon_diff_summary(recon)
+            for rel in ("findings.json", "recon.json"):
+                prev_path = os.path.join(prev_recon_base, rel)
+                if not os.path.isfile(prev_path):
+                    continue
+                try:
+                    with open(prev_path, encoding="utf-8") as f:
+                        prev_data = json.load(f)
+                    if rel == "findings.json":
+                        report["recon_diff"] = self._compare_findings_lists(
+                            recon.get("findings", []), prev_data
+                        )
+                    else:
+                        report["recon_diff"] = self._compare_recon(recon, prev_data)
+                    break
+                except Exception:
+                    pass
         with open(diff_json_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
@@ -1098,9 +1388,24 @@ class Storage:
         fail_lines   = [f"  - [{f['url']}]({f['url']}) — `{f['error']}`" for f in failures]
         failed_list  = "\n".join(fail_lines) or "  - *None*"
 
+        recon_section = ""
+        if recon and report.get("recon_diff"):
+            rd = report["recon_diff"]
+            recon_section = f"""
+## Recon Changes
+
+* **New findings**: {len(rd.get('new_findings', []))}
+* **Resolved findings**: {len(rd.get('resolved_findings', []))}
+* **Findings count delta**: {rd.get('findings_delta', {})}
+"""
+            if rd.get("new_findings"):
+                recon_section += "\n**New:**\n" + "\n".join(
+                    f"  - {f}" for f in rd["new_findings"][:20]
+                )
+
         md = f"""# WebVac Scan Diff — `{slug}`
 
-*Generated on {timestamp}*
+*Generated on {display_time}*
 
 ## Scan Overview
 
@@ -1124,6 +1429,7 @@ class Storage:
 ## Current Failures & Blocks ({len(failures)})
 
 {failed_list}
+{recon_section}
 """
         with open(diff_md_path, "w", encoding="utf-8") as f:
             f.write(md)
@@ -1133,4 +1439,50 @@ class Storage:
         print(f"  Removed   : {len(removed_urls)} page(s)")
         print(f"  Modified  : {len(modified)} page(s)")
         print(f"  Failures  : {len(failures)} page(s)")
+        if recon and report.get("recon_diff"):
+            rd = report["recon_diff"]
+            print(f"  Recon     : +{len(rd.get('new_findings', []))} new findings, -{len(rd.get('resolved_findings', []))} resolved")
         print(f"  Report    -> {os.path.relpath(diff_md_path)}")
+
+    @staticmethod
+    def _compare_findings_lists(current: list, previous: list) -> dict:
+        cur_fc: dict[str, int] = {}
+        prev_fc: dict[str, int] = {}
+        for f in current:
+            sev = f.get("severity", "info")
+            cur_fc[sev] = cur_fc.get(sev, 0) + 1
+        for f in previous:
+            sev = f.get("severity", "info")
+            prev_fc[sev] = prev_fc.get(sev, 0) + 1
+        return Storage._compare_recon(
+            {"findings": current, "findings_count": cur_fc},
+            {"findings": previous, "findings_count": prev_fc},
+        )
+
+    @staticmethod
+    def _recon_diff_summary(recon: dict[str, Any]) -> dict:
+        findings = recon.get("findings") or []
+        return {
+            "findings_count": recon.get("findings_count", {}),
+            "observations_count": recon.get("observations_count", 0),
+            "finding_titles": sorted(f.get("title", "") for f in findings),
+            "mode": recon.get("session", {}).get("mode", "passive"),
+        }
+
+    @staticmethod
+    def _compare_recon(current: dict, previous: dict) -> dict:
+        cur_findings = {f.get("title") for f in current.get("findings", []) if f.get("title")}
+        prev_findings = {f.get("title") for f in previous.get("findings", []) if f.get("title")}
+        new_f = sorted(cur_findings - prev_findings)
+        resolved = sorted(prev_findings - cur_findings)
+        cur_fc = current.get("findings_count") or {}
+        prev_fc = previous.get("findings_count") or {}
+        delta = {
+            k: cur_fc.get(k, 0) - prev_fc.get(k, 0)
+            for k in set(cur_fc) | set(prev_fc)
+        }
+        return {
+            "new_findings": new_f,
+            "resolved_findings": resolved,
+            "findings_delta": delta,
+        }

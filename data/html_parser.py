@@ -1,69 +1,63 @@
 """
-extractor.py — Universal data extractor.
-Pulls every meaningful data type from a rendered page.
+HTML → legacy page record dict parsing (forms, links, meta, etc.).
 """
 
-import re
+from __future__ import annotations
+
 import json
+import re
 from datetime import datetime, timezone
+from typing import Optional
 from urllib.parse import urljoin, urlparse
+
 from bs4 import BeautifulSoup
-from patchright.async_api import Page
+
 from auth.default_creds import DefaultCredsChecker
 
 _creds_checker = DefaultCredsChecker()
 
+_SOCIAL_DOMAINS = (
+    "facebook.com", "twitter.com", "x.com", "instagram.com",
+    "linkedin.com", "youtube.com", "tiktok.com", "github.com",
+    "pinterest.com", "reddit.com", "snapchat.com", "telegram.org",
+    "whatsapp.com", "discord.com",
+)
 
-from typing import Optional
 
-class Extractor:
-    """Extracts all data types from a Playwright page."""
+class HtmlPageParser:
+    """Parses rendered HTML into the legacy scrape page dict schema."""
 
-    def __init__(self, extract_css: Optional[list[str]] = None, extract_xpath: Optional[list[str]] = None):
-        self.css_selectors = {}
-        for item in (extract_css or []):
+    def __init__(
+        self,
+        extract_css: Optional[list[str]] = None,
+        extract_xpath: Optional[list[str]] = None,
+    ) -> None:
+        self.css_selectors: dict[str, str] = {}
+        for item in extract_css or []:
             if "=" in item:
                 k, v = item.split("=", 1)
                 self.css_selectors[k] = v
-                
-        self.xpath_selectors = {}
-        for item in (extract_xpath or []):
+
+        self.xpath_selectors: dict[str, str] = {}
+        for item in extract_xpath or []:
             if "=" in item:
                 k, v = item.split("=", 1)
                 self.xpath_selectors[k] = v
 
-    async def extract(self, page: Page, base_url: str, server_header: str = "") -> dict:
-        """Run all extractors and return a unified data dict."""
-        html = await page.content()
+    def build_from_html(
+        self,
+        html: str,
+        *,
+        page_url: str,
+        base_url: str,
+        server_header: str = "",
+    ) -> dict:
         soup = BeautifulSoup(html, "lxml")
-        url = page.url
         title = self._title(soup)
+        targeted_data = self._targeted_data(html, soup)
 
-        targeted_data = {}
-        # CSS Extraction
-        for key, sel in self.css_selectors.items():
-            elements = soup.select(sel)
-            targeted_data[key] = [el.get_text(strip=True) for el in elements]
-            
-        # XPath Extraction
-        if self.xpath_selectors:
-            from lxml import html as lxml_html
-            tree = lxml_html.fromstring(html)
-            for key, xpath in self.xpath_selectors.items():
-                try:
-                    elements = tree.xpath(xpath)
-                    extracted = []
-                    for el in elements:
-                        if hasattr(el, 'text_content'):
-                            extracted.append(el.text_content().strip())
-                        elif isinstance(el, str):
-                            extracted.append(el.strip())
-                    targeted_data[key] = extracted
-                except Exception as e:
-                    targeted_data[key] = f"XPath Error: {str(e)}"
-
-        data = {
-            "url": url,
+        return {
+            "url": page_url,
             "targeted_data": targeted_data,
             "status": "success",
             "scraped_at": datetime.now(timezone.utc).isoformat(),
@@ -85,25 +79,44 @@ class Extractor:
             "phone_numbers": self._phones(soup),
             "social_links": self._social_links(soup),
             "word_count": self._word_count(soup),
-            # EyeWitness-style default credential check
-            "default_creds": self._check_default_creds(url, title, server_header),
-            # Filled in by crawler.py if a CAPTCHA screenshot was captured
+            "default_creds": self._check_default_creds(page_url, title, server_header),
             "screenshot": None,
         }
-        return data
 
-    # ── Basic ────────────────────────────────────────────────────────────────
+    def _targeted_data(self, html: str, soup) -> dict:
+        targeted: dict = {}
+        for key, sel in self.css_selectors.items():
+            elements = soup.select(sel)
+            targeted[key] = [el.get_text(strip=True) for el in elements]
 
-    def _title(self, soup) -> str:
+        if self.xpath_selectors:
+            from lxml import html as lxml_html
+
+            tree = lxml_html.fromstring(html)
+            for key, xpath in self.xpath_selectors.items():
+                try:
+                    elements = tree.xpath(xpath)
+                    extracted = []
+                    for el in elements:
+                        if hasattr(el, "text_content"):
+                            extracted.append(el.text_content().strip())
+                        elif isinstance(el, str):
+                            extracted.append(el.strip())
+                    targeted[key] = extracted
+                except Exception as e:
+                    targeted[key] = f"XPath Error: {str(e)}"
+        return targeted
+
+    @staticmethod
+    def _title(soup) -> str:
         tag = soup.find("title")
         return tag.get_text(strip=True) if tag else ""
 
-    def _word_count(self, soup) -> int:
-        text = soup.get_text(separator=" ")
-        return len(text.split())
+    @staticmethod
+    def _word_count(soup) -> int:
+        return len(soup.get_text(separator=" ").split())
 
     def _check_default_creds(self, url: str, title: str, server_header: str) -> list[dict]:
-        """Check whether the page looks like a known vendor login panel."""
         matches = _creds_checker.check(url=url, title=title, server_header=server_header)
         if matches:
             for m in matches:
@@ -114,9 +127,8 @@ class Extractor:
                 )
         return matches
 
-    # ── Meta tags ────────────────────────────────────────────────────────────
-
-    def _meta(self, soup) -> dict:
+    @staticmethod
+    def _meta(soup) -> dict:
         meta = {}
         for tag in soup.find_all("meta"):
             name = tag.get("name") or tag.get("property") or tag.get("http-equiv")
@@ -125,21 +137,24 @@ class Extractor:
                 meta[name] = content
         return meta
 
-    def _open_graph(self, soup) -> dict:
+    @staticmethod
+    def _open_graph(soup) -> dict:
         og = {}
         for tag in soup.find_all("meta", property=re.compile(r"^og:")):
             key = tag.get("property", "").replace("og:", "")
             og[key] = tag.get("content", "")
         return og
 
-    def _twitter_card(self, soup) -> dict:
+    @staticmethod
+    def _twitter_card(soup) -> dict:
         tc = {}
         for tag in soup.find_all("meta", attrs={"name": re.compile(r"^twitter:")}):
             key = tag.get("name", "").replace("twitter:", "")
             tc[key] = tag.get("content", "")
         return tc
 
-    def _json_ld(self, soup) -> list:
+    @staticmethod
+    def _json_ld(soup) -> list:
         results = []
         for tag in soup.find_all("script", type="application/ld+json"):
             try:
@@ -148,9 +163,8 @@ class Extractor:
                 pass
         return results
 
-    # ── Content ──────────────────────────────────────────────────────────────
-
-    def _headings(self, soup) -> dict:
+    @staticmethod
+    def _headings(soup) -> dict:
         headings = {}
         for level in range(1, 7):
             tags = soup.find_all(f"h{level}")
@@ -159,25 +173,25 @@ class Extractor:
                 headings[f"h{level}"] = texts
         return headings
 
-    def _paragraphs(self, soup) -> list:
+    @staticmethod
+    def _paragraphs(soup) -> list:
         return [
             p.get_text(strip=True)
             for p in soup.find_all("p")
             if p.get_text(strip=True)
         ]
 
-    def _lists(self, soup) -> list:
+    @staticmethod
+    def _lists(soup) -> list:
         result = []
         for lst in soup.find_all(["ul", "ol"]):
             items = [li.get_text(strip=True) for li in lst.find_all("li") if li.get_text(strip=True)]
             if items:
-                result.append({
-                    "type": lst.name,  # ul or ol
-                    "items": items,
-                })
+                result.append({"type": lst.name, "items": items})
         return result
 
-    def _code_blocks(self, soup) -> list:
+    @staticmethod
+    def _code_blocks(soup) -> list:
         blocks = []
         for tag in soup.find_all(["pre", "code"]):
             text = tag.get_text(strip=True)
@@ -189,9 +203,8 @@ class Extractor:
                 })
         return blocks
 
-    # ── Links & Images ───────────────────────────────────────────────────────
-
-    def _links(self, soup, base_url: str) -> list:
+    @staticmethod
+    def _links(soup, base_url: str) -> list:
         seen = set()
         links = []
         origin = urlparse(base_url).netloc
@@ -212,7 +225,8 @@ class Extractor:
             })
         return links
 
-    def _images(self, soup, base_url: str) -> list:
+    @staticmethod
+    def _images(soup, base_url: str) -> list:
         images = []
         for tag in soup.find_all("img"):
             src = tag.get("src") or tag.get("data-src") or tag.get("data-lazy-src")
@@ -227,9 +241,8 @@ class Extractor:
             })
         return images
 
-    # ── Tables ───────────────────────────────────────────────────────────────
-
-    def _tables(self, soup) -> list:
+    @staticmethod
+    def _tables(soup) -> list:
         tables = []
         for table in soup.find_all("table"):
             headers = [th.get_text(strip=True) for th in table.find_all("th")]
@@ -245,9 +258,8 @@ class Extractor:
                 tables.append({"headers": headers, "rows": rows})
         return tables
 
-    # ── Forms ────────────────────────────────────────────────────────────────
-
-    def _forms(self, soup) -> list:
+    @staticmethod
+    def _forms(soup) -> list:
         forms = []
         for form in soup.find_all("form"):
             fields = []
@@ -267,9 +279,8 @@ class Extractor:
             })
         return forms
 
-    # ── Media ────────────────────────────────────────────────────────────────
-
-    def _media(self, soup, base_url: str) -> dict:
+    @staticmethod
+    def _media(soup, base_url: str) -> dict:
         videos, audios, iframes = [], [], []
         for tag in soup.find_all("video"):
             src = tag.get("src") or (tag.find("source") and tag.find("source").get("src"))
@@ -285,30 +296,25 @@ class Extractor:
                 iframes.append(src)
         return {"videos": videos, "audios": audios, "iframes": iframes}
 
-    # ── Contact Info ─────────────────────────────────────────────────────────
-
-    def _emails(self, soup) -> list:
+    @staticmethod
+    def _emails(soup) -> list:
         text = soup.get_text()
         pattern = r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
         return list(set(re.findall(pattern, text)))
 
-    def _phones(self, soup) -> list:
+    @staticmethod
+    def _phones(soup) -> list:
         text = soup.get_text()
         pattern = r"(\+?\d[\d\s\-().]{7,}\d)"
         raw = re.findall(pattern, text)
         return list(set(r.strip() for r in raw if len(re.sub(r"\D", "", r)) >= 7))
 
-    def _social_links(self, soup) -> list:
-        SOCIAL_DOMAINS = [
-            "facebook.com", "twitter.com", "x.com", "instagram.com",
-            "linkedin.com", "youtube.com", "tiktok.com", "github.com",
-            "pinterest.com", "reddit.com", "snapchat.com", "telegram.org",
-            "whatsapp.com", "discord.com",
-        ]
+    @staticmethod
+    def _social_links(soup) -> list:
         social = []
         for tag in soup.find_all("a", href=True):
             href = tag["href"]
-            for domain in SOCIAL_DOMAINS:
+            for domain in _SOCIAL_DOMAINS:
                 if domain in href:
                     social.append({"platform": domain.split(".")[0], "url": href})
                     break

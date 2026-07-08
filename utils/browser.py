@@ -2,9 +2,7 @@
 browser.py — Dual-engine browser manager with automatic stealth fallback.
 
 Engine strategy:
-  1. Primary:  Standard Playwright (faster, smaller overhead, no patches)
-  2. Fallback: Patchright stealth engine (activated automatically when bot-
-               detection is confirmed by detection.py heuristics)
+  1. Primary:  Patchright stealth engine (automatically bypasses bot detection)
 
 Anti-detection hardening (all free, no proxy required):
   - WebRTC leak blocking       : prevents real IP leaking through WebRTC
@@ -19,14 +17,11 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import Literal, Optional
+from typing import Optional
 
 from config.config import DEFAULT_CONFIG
 from utils.detection import is_bot_detected
-
-
-# ── Engine type alias ─────────────────────────────────────────────────────────
-Engine = Literal["playwright", "patchright"]
+from utils.browser_pool import BrowserSlot, SlotIdentity
 
 
 # ── User-Agent pool ───────────────────────────────────────────────────────────
@@ -317,9 +312,7 @@ class BrowserManager:
     """
     Manages a single Chromium browser instance.
 
-    On startup it uses the standard Playwright engine.  If bot/CAPTCHA
-    detection fires (see detection.py), it transparently closes the current
-    browser and re-launches using Patchright's stealth-patched engine.
+    Uses Patchright's stealth-patched engine by default.
 
     Anti-detection hardening applied automatically per context:
       - User-Agent rotation from a curated pool
@@ -330,8 +323,6 @@ class BrowserManager:
       - Canvas + Audio fingerprint noise injection
       - Viewport size rotation
 
-    Public attributes:
-        engine (str): "playwright" or "patchright" — current active engine.
     """
 
     def __init__(
@@ -354,9 +345,16 @@ class BrowserManager:
         self.rotate_user_agent = rotate_user_agent
         self.rotate_geolocation = rotate_geolocation
         self.rotate_viewport = rotate_viewport
+        self._host_resolver_rules: Optional[str] = None
+        self._pool_size: int = 1
+        self._slots: list[BrowserSlot] = []
+        self._slot_proxy_configs: list[SlotIdentity] = []
+        self._session_platform: str = "Windows"
+        self._session_sec_ch_ua: str = (
+            '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+        )
 
         # Active engine state
-        self.engine: Engine = "playwright"
         self._playwright_handle = None
         self._browser = None
         self._context = None
@@ -368,93 +366,257 @@ class BrowserManager:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    async def start(self, proxy: Optional[dict] = None) -> None:
+    async def start(
+        self,
+        proxy: Optional[dict] = None,
+        *,
+        host_resolver_rules: Optional[str] = None,
+        pool_size: int = 1,
+        slot_identities: Optional[list[SlotIdentity]] = None,
+    ) -> None:
         """
-        Launch the browser using the PRIMARY (Playwright) engine.
+        Launch the browser using Patchright stealth engine.
 
         Args:
-            proxy: Optional Playwright proxy dict, e.g.
-                   {"server": "http://host:port", "username": "u", "password": "p"}
+            proxy: Default proxy for slot 0 when slot_identities omitted.
+            host_resolver_rules: Chromium MAP rule(s) for origin bypass.
+            pool_size: Isolated browser contexts for concurrent workers.
+            slot_identities: Per-slot proxy + pinned UA identity.
         """
-        self.engine = "playwright"
-        await self._launch("playwright", proxy)
+        self._pool_size = max(1, pool_size)
+        self._host_resolver_rules = host_resolver_rules
+        if slot_identities:
+            self._slot_proxy_configs = slot_identities
+        elif proxy:
+            self._slot_proxy_configs = [SlotIdentity(proxy=proxy)]
+        else:
+            self._slot_proxy_configs = []
+        await self._launch("patchright")
 
-    async def switch_to_patchright(self, proxy: Optional[dict] = None) -> None:
-        """
-        Close the current browser and re-launch using Patchright stealth engine.
-        A new random US identity is assigned on the switch for extra variance.
-        """
-        print("[Browser] 🛡  Switching to Patchright stealth engine...")
-        await self._shutdown_current()
-        self._rotate_identity()   # fresh UA + location on engine switch
-        self.engine = "patchright"
-        await self._launch("patchright", proxy)
-        print("[Browser] ✓  Patchright stealth engine active.")
-
-    async def check_and_maybe_switch(
+    async def check_for_bot(
         self,
         page,
         response=None,
         proxy: Optional[dict] = None,
     ) -> bool:
         """
-        Run bot-detection heuristics.  If triggered AND engine is still
-        "playwright", automatically switch to Patchright.
+        Run bot-detection heuristics.
 
         Returns:
-            True  — bot detected (engine may or may not have switched).
+            True  — bot detected.
             False — page looks clean.
         """
         if not await is_bot_detected(page, response):
             return False
 
-        if self.engine == "playwright":
-            await self.switch_to_patchright(proxy=proxy)
-        else:
-            print(
-                "[Browser] ⚠  Bot/CAPTCHA detected even with Patchright engine. "
-                "Consider rotating proxies or adding delays."
-            )
+        print(
+            "[Browser] ⚠  Bot/CAPTCHA detected even with Patchright engine. "
+            "Consider rotating proxies or adding delays."
+        )
 
         return True
 
-    async def rotate_proxy(self, proxy: Optional[dict]) -> None:
+    async def prompt_captcha_solve(self, url: str, proxy: Optional[dict] = None) -> bool:
         """
-        Switch to a new proxy by closing the current context and creating a
-        fresh one.  A new random US identity is also assigned so the new IP
-        comes with matching browser fingerprint variance.
+        Last-resort manual CAPTCHA solver.
 
-        ⚠  All Page objects from the old context are invalid after this call.
-           Always call new_page() after rotating.
+        When all automated evasion steps have been exhausted, this method:
+          1. Closes the current hidden browser.
+          2. Re-launches a VISIBLE browser window (headless=False) so the
+             user can see and interact with the CAPTCHA.
+          3. Navigates to the blocked URL in the visible window.
+          4. Prints a clear terminal prompt and BLOCKS until the user
+             presses Enter (signalling that the CAPTCHA has been solved).
+          5. Saves the solved cookies back into the context so subsequent
+             pages in the same crawl session are already authenticated.
+          6. Re-launches the browser in headless mode (restoring normal
+             operation) and injects the saved cookies into the new context.
+
+        Args:
+            url:   The URL that triggered the CAPTCHA.
+            proxy: Active proxy dict (forwarded to the visible browser).
+
+        Returns:
+            True  — user confirmed the CAPTCHA was solved.
+            False — an error occurred during the visible browser session.
         """
-        self._rotate_identity()   # fresh UA + location with the new proxy
-        if self._context:
-            await self._context.close()
-        self._context = await self._new_context(proxy)
-        label = proxy["server"] if proxy else "direct (no proxy)"
-        city = self._session_location[0]
-        print(
-            f"[Browser] Context rotated → {label}  "
-            f"(engine: {self.engine}, location: {city})"
+        print()
+        print("[CAPTCHA] " + "═" * 55)
+        print("[CAPTCHA]  🚨  CAPTCHA / Bot-block detected!")
+        print("[CAPTCHA] " + "═" * 55)
+        print(f"[CAPTCHA]  URL: {url}")
+        print("[CAPTCHA]  Opening a VISIBLE browser window for you to solve it...")
+        print("[CAPTCHA] " + "─" * 55)
+
+        # ── Save cookies from current (headless) session ──────────────
+        saved_cookies: list = []
+        try:
+            saved_cookies = await self.get_cookies()
+        except Exception:
+            pass
+
+        # ── Relaunch as VISIBLE browser ───────────────────────────────
+        await self._shutdown_current()
+        was_headless = self.headless
+        self.headless = False
+        try:
+            await self._launch(self.engine)
+            # Restore previous session cookies so the user lands in the
+            # right session context (e.g. logged-in state is preserved)
+            if saved_cookies:
+                try:
+                    await self.load_cookies(saved_cookies)
+                except Exception:
+                    pass
+
+            visible_page = await self.new_page()
+            try:
+                await visible_page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+            except Exception as nav_err:
+                print(f"[CAPTCHA]  Navigation error (non-fatal): {nav_err}")
+
+            # ── Wait for user ─────────────────────────────────────────
+            print("[CAPTCHA]")
+            print("[CAPTCHA]  👆  A browser window has opened.")
+            print("[CAPTCHA]  Please solve the CAPTCHA in that window.")
+            print("[CAPTCHA]  When you are done, come back here and press ENTER.")
+            print("[CAPTCHA]")
+
+            # Run the blocking input() in a thread so we don't freeze
+            # the entire asyncio event loop (important if other tasks
+            # are running, e.g. tqdm refreshes).
+            loop = asyncio.get_event_loop()
+            prompt = "[CAPTCHA]  ▶  Press ENTER when CAPTCHA is solved: "
+            timeout_sec = float(DEFAULT_CONFIG.get("captcha_prompt_timeout_sec", 0) or 0)
+            try:
+                if timeout_sec > 0:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, input, prompt),
+                        timeout=timeout_sec,
+                    )
+                else:
+                    await loop.run_in_executor(None, input, prompt)
+            except asyncio.TimeoutError:
+                print(f"[CAPTCHA]  ⏱  Timed out after {timeout_sec:.0f}s — continuing without solve.")
+                await visible_page.close()
+                self.headless = was_headless
+                await self._shutdown_current()
+                await self._launch(self.engine)
+                return False
+
+            print("[CAPTCHA]  ✅  Thank you! Resuming scrape...")
+            print("[CAPTCHA] " + "═" * 55)
+            print()
+
+            # Save cookies AFTER solving so the bypass token is kept
+            post_solve_cookies: list = []
+            try:
+                post_solve_cookies = await self.get_cookies()
+            except Exception:
+                pass
+
+            await visible_page.close()
+
+            # ── Restore headless browser with solved cookies ───────────
+            self.headless = was_headless
+            await self._shutdown_current()
+            await self._launch(self.engine)
+            if post_solve_cookies:
+                try:
+                    await self.load_cookies(post_solve_cookies)
+                except Exception:
+                    pass
+
+            return True
+
+        except Exception as exc:
+            print(f"[CAPTCHA]  ❌  Error during visible CAPTCHA session: {exc}")
+            # Always restore headless mode even on failure
+            self.headless = was_headless
+            try:
+                await self._shutdown_current()
+                await self._launch(self.engine)
+            except Exception:
+                pass
+            return False
+
+    async def rotate_proxy(
+        self,
+        proxy: Optional[dict],
+        *,
+        slot: int = 0,
+        pinned_ua: Optional[str] = None,
+        pinned_platform: Optional[str] = None,
+        pinned_sec_ch_ua: Optional[str] = None,
+    ) -> None:
+        """Recreate one pool slot's context with a new proxy and pinned identity."""
+        self._apply_identity(
+            pinned_ua=pinned_ua,
+            pinned_platform=pinned_platform,
+            pinned_sec_ch_ua=pinned_sec_ch_ua,
         )
+        await self._recreate_slot(
+            slot,
+            proxy,
+            SlotIdentity(
+                proxy=proxy,
+                ua=self._session_ua,
+                platform=self._session_platform,
+                sec_ch_ua=self._session_sec_ch_ua,
+            ),
+        )
+        label = proxy["server"] if proxy else "direct (no proxy)"
+        print(f"[Browser] Slot {slot} rotated → {label}")
 
-    async def new_page(self):
-        """Open a new tab in the current context."""
-        return await self._context.new_page()
+    async def reconfigure_host_resolver(
+        self,
+        rule: Optional[str],
+        slot_identities: Optional[list[SlotIdentity]] = None,
+    ) -> None:
+        """Restart browser with new host-resolver rules (origin bypass)."""
+        self._host_resolver_rules = rule
+        if slot_identities is not None:
+            self._slot_proxy_configs = slot_identities
+        engine = getattr(self, "engine", "patchright")
+        await self._shutdown_current()
+        await self._launch(engine)
+
+    async def new_page(self, slot: int = 0):
+        """Open a new tab in an isolated pool slot."""
+        slot_idx = slot % max(1, self._pool_size)
+        bs = self._slots[slot_idx]
+        async with bs.lock:
+            for _ in range(30):
+                if bs.context:
+                    try:
+                        return await bs.context.new_page()
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        if "closed" not in err_str and "destroyed" not in err_str:
+                            raise e
+                await asyncio.sleep(0.5)
+        raise RuntimeError(f"Browser slot {slot_idx} unavailable.")
 
     @property
     def context(self):
-        """Return the current BrowserContext (for cookie injection, etc.)."""
+        """Primary context (slot 0) for cookie injection."""
+        if self._slots:
+            return self._slots[0].context
         return self._context
 
-    async def load_cookies(self, cookies: list) -> None:
-        """Inject saved cookies into the current context."""
-        if cookies:
-            await self._context.add_cookies(cookies)
+    async def load_cookies(self, cookies: list, slot: int = 0) -> None:
+        """Inject saved cookies into a pool slot."""
+        ctx = self.context if not self._slots else self._slots[slot % self._pool_size].context
+        if cookies and ctx:
+            await ctx.add_cookies(cookies)
 
-    async def get_cookies(self) -> list:
-        """Export current cookies for reuse across sessions."""
-        return await self._context.cookies()
+    async def get_cookies(self, slot: int = 0) -> list:
+        ctx = self.context if not self._slots else self._slots[slot % self._pool_size].context
+        return await ctx.cookies() if ctx else []
 
     async def stop(self) -> None:
         """Shut down the browser cleanly."""
@@ -547,54 +709,116 @@ class BrowserManager:
             return random.choice(_VIEWPORTS)
         return {"width": 1920, "height": 1080}
 
-    def _rotate_identity(self) -> None:
-        """Pick a fresh UA, location, and viewport (called on proxy/engine switch)."""
-        self._session_ua = self._pick_user_agent()
+    def _apply_identity(
+        self,
+        *,
+        pinned_ua: Optional[str] = None,
+        pinned_platform: Optional[str] = None,
+        pinned_sec_ch_ua: Optional[str] = None,
+    ) -> None:
+        self._session_ua = pinned_ua or self._pick_user_agent()
+        self._session_platform = pinned_platform or "Windows"
+        self._session_sec_ch_ua = pinned_sec_ch_ua or (
+            '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+        )
         self._session_location = self._pick_location()
         self._session_viewport = self._pick_viewport()
+
+    def _rotate_identity(self, pinned_ua: Optional[str] = None) -> None:
+        self._apply_identity(pinned_ua=pinned_ua)
         city = self._session_location[0]
         print(f"[Browser] [Identity] {self._session_ua[:65]}...  location={city}")
 
+    def _navigator_platform(self) -> str:
+        return "MacIntel" if "mac" in self._session_platform.lower() else "Win32"
+
+    async def _recreate_slot(
+        self, slot: int, proxy: Optional[dict], identity: SlotIdentity,
+    ) -> None:
+        slot_idx = slot % max(1, self._pool_size)
+        while len(self._slots) <= slot_idx:
+            self._slots.append(BrowserSlot(index=len(self._slots)))
+        bs = self._slots[slot_idx]
+        self._apply_identity(
+            pinned_ua=identity.ua or None,
+            pinned_platform=identity.platform,
+            pinned_sec_ch_ua=identity.sec_ch_ua,
+        )
+        await bs.close()
+        bs.identity = identity
+        bs.context = await self._new_context(
+            proxy or identity.proxy,
+            ignore_https_errors=bool(self._host_resolver_rules),
+        )
+        if slot_idx == 0:
+            self._context = bs.context
+
+    async def _init_pool(self) -> None:
+        self._slots = []
+        for i in range(self._pool_size):
+            ident = (
+                self._slot_proxy_configs[i]
+                if i < len(self._slot_proxy_configs)
+                else SlotIdentity()
+            )
+            if ident.ua:
+                self._apply_identity(
+                    pinned_ua=ident.ua,
+                    pinned_platform=ident.platform,
+                    pinned_sec_ch_ua=ident.sec_ch_ua,
+                )
+            else:
+                self._rotate_identity()
+            bs = BrowserSlot(index=i, identity=ident)
+            bs.context = await self._new_context(
+                ident.proxy,
+                ignore_https_errors=bool(self._host_resolver_rules),
+            )
+            self._slots.append(bs)
+        self._context = self._slots[0].context if self._slots else None
+
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    async def _launch(self, engine: Engine, proxy: Optional[dict]) -> None:
-        """Launch a browser using the specified engine and wire up the context."""
-        if engine == "playwright":
-            from playwright.async_api import async_playwright
-        else:
-            from patchright.async_api import async_playwright
+    async def _launch(self, engine: str) -> None:
+        """Launch browser and initialize the context pool."""
+        from patchright.async_api import async_playwright
+
+        self.engine = engine
+        launch_args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+            "--disable-dev-shm-usage",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            f"--window-size={self._session_viewport['width']},{self._session_viewport['height']}",
+        ]
+        if self._host_resolver_rules:
+            launch_args.append(f"--host-resolver-rules={self._host_resolver_rules}")
+            launch_args.append("--ignore-certificate-errors")
 
         self._playwright_handle = await async_playwright().start()
         self._browser = await self._playwright_handle.chromium.launch(
             headless=self.headless,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
-                "--disable-dev-shm-usage",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-default-apps",
-                # WebRTC stays alive (JS spoofer handles IP rewriting)
-                # Removing kill flags allows RTCPeerConnection to function
-                # normally — the init script replaces real IPs transparently.
-                f"--window-size={self._session_viewport['width']},{self._session_viewport['height']}",
-            ],
+            args=launch_args,
         )
-        self._context = await self._new_context(proxy)
+        await self._init_pool()
 
-        proxy_label = proxy["server"] if proxy else "no proxy"
-        city = self._session_location[0]
+        resolver = f"  resolver={self._host_resolver_rules}" if self._host_resolver_rules else ""
         print(
-            f"[Browser] Chromium launched  "
-            f"engine={engine}  proxy={proxy_label}  location={city}"
+            f"[Browser] Chromium launched  engine={engine}  "
+            f"pool={self._pool_size}{resolver}"
         )
 
     async def _shutdown_current(self) -> None:
-        """Close the current context, browser, and playwright handle."""
+        """Close all pool contexts, browser, and playwright handle."""
+        for bs in self._slots:
+            await bs.close()
+        self._slots = []
         try:
             if self._context:
                 await self._context.close()
@@ -614,7 +838,12 @@ class BrowserManager:
         except Exception:
             pass
 
-    async def _new_context(self, proxy: Optional[dict] = None):
+    async def _new_context(
+        self,
+        proxy: Optional[dict] = None,
+        *,
+        ignore_https_errors: bool = False,
+    ):
         """
         Create a hardened browser context with full anti-detection profile:
           - Rotated User-Agent (real Chrome/Windows/macOS strings)
@@ -640,11 +869,12 @@ class BrowserManager:
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Encoding": "gzip, deflate, br",
-                "Sec-CH-UA-Platform": '"Windows"',
-                "Sec-CH-UA": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-CH-UA-Platform": f'"{self._session_platform}"',
+                "Sec-CH-UA": self._session_sec_ch_ua,
                 "Sec-CH-UA-Mobile": "?0",
                 "Upgrade-Insecure-Requests": "1",
             },
+            ignore_https_errors=ignore_https_errors,
         )
 
         if proxy:
@@ -655,5 +885,9 @@ class BrowserManager:
         # Inject full stealth init script (WebRTC block, navigator masking,
         # canvas/audio noise, plugin spoofing) — runs before any page JS
         await context.add_init_script(_STEALTH_INIT_SCRIPT)
+        await context.add_init_script(
+            f"Object.defineProperty(navigator, 'platform', "
+            f"{{ get: () => '{self._navigator_platform()}' }});"
+        )
 
         return context

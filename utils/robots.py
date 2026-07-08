@@ -62,8 +62,10 @@ class RobotsHandler:
 
         try:
             loop = asyncio.get_running_loop()
-            # RobotFileParser.read() is synchronous — run it off the event loop
-            await loop.run_in_executor(None, parser.read)
+            await asyncio.wait_for(
+                loop.run_in_executor(None, parser.read),
+                timeout=15.0,
+            )
 
             # Prefer our user-agent's delay, fall back to wildcard, then 0
             delay = (
@@ -74,6 +76,9 @@ class RobotsHandler:
             delay = float(delay)
             status = f"crawl-delay={delay}s" if delay else "no crawl-delay"
             print(f"[Robots] {origin} -> {status}")
+        except asyncio.TimeoutError:
+            print(f"[Robots] Timeout fetching {robots_url} -- assuming allowed")
+            delay = 0.0
         except Exception as exc:
             print(f"[Robots] Could not fetch {robots_url}: {exc} -- assuming allowed")
             delay = 0.0

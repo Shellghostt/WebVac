@@ -60,7 +60,7 @@ class ScreenshotModule:
         If no, return None.
 
         Args:
-            page:     A Playwright/Patchright ``Page`` object (already loaded).
+            page:     A Patchright ``Page`` object (already loaded).
             url:      The original requested URL (used for filename generation).
             response: The ``Response`` from ``page.goto()``, or None.
 
