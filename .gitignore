@@ -36,6 +36,13 @@ scraped_data/
 screenshots/
 *.log
 
+# Secrets / local auth (use auth_creds.example.json as a template)
+auth_creds.json
+sessions/
+proxies.txt
+.env.*
+!.env.example
+
 # Databases
 *.sqlite
 *.sqlite3
