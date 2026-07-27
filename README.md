@@ -14,6 +14,8 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Structured output in JSON, CSV, HTML, Markdown, SQLite, or all formats
 - Historical scan sessions and diff generation between runs
 - PDF and sourcemap asset download support
+- Unified auth: Patchright or Nodriver login, session restore, MFA/TOTP, OAuth bootstrap
+- Mid-crawl auth-wall handling, logout URL deny, and sticky proxy when authenticated
 - Optional VAPT/recon pipeline present in codebase (disabled by default)
 
 ## Project Structure
@@ -22,6 +24,7 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - `core/scraper.py`: Main CLI entry point and orchestration
 - `core/crawler.py`: BFS crawler logic
 - `core/page_scrape_flow.py`: Per-page execution flow and anti-block handling
+- `auth/`: AuthManager, session store, profiles, MFA, auth-wall detection
 - `utils/`: Browser management, proxies, robots handling, screenshots, origin probing
 - `data/`: HTML parsing, record building, and storage/export pipeline
 - `store/`: Scan session layout and artifact persistence helpers
@@ -106,12 +109,40 @@ python -m core.scraper --url https://example.com --mode crawl --depth 3 --max-pa
 - `--ignore-crawl-delay`: Obey allow/deny rules but ignore crawl-delay
 - `--delay-min`, `--delay-max`: Request pacing window
 
-### Login/session
+### Login / authentication
 
-- `--login`: Enable login flow
+- `--login`: Enable login before scraping (forces `dynamic` engine)
 - `--login-url`: Login page URL
-- `--username`, `--password`: Credentials
-- `--session-file`: Reuse and persist session cookies
+- `--username`, `--password`: Credentials (or set `WEBVAC_USER` / `WEBVAC_PASS`)
+- `--auth-engine patchright|nodriver`: Browser engine for login only (crawl stays Patchright)
+- `--session-file`: Load/save Playwright `storage_state` (legacy cookie-list files still work)
+- `--auth-profile FILE`: Rich credentials JSON (selectors, steps, TOTP, policies) — see `auth_creds.example.json`
+- `--auth-check-url URL`: Protected URL used to verify session after login/restore
+- `--on-auth-wall abort|skip|relogin`: Mid-crawl login-wall policy (default: `skip`)
+- `--session-ttl SECONDS`: Expire saved sessions (0 = never)
+- `--auth-bootstrap`: Open a visible browser for manual OAuth/SSO, then export `--session-file`
+- `--otp-prompt`: Prompt for OTP/MFA when an OTP field appears
+- `--no-auth-proxy-rotate`: Pin proxy while authenticated (also default when `--login`)
+
+Env vars: `WEBVAC_USER`, `WEBVAC_PASS`, optional `WEBVAC_SESSION_KEY` (Fernet-encrypt session files).
+
+Example — login then crawl:
+
+```bash
+python -m core.scraper --url https://example.com/dashboard --mode crawl \
+  --login --login-url https://example.com/login \
+  --username you@example.com --password secret \
+  --session-file sessions/example.json \
+  --auth-check-url https://example.com/account \
+  --on-auth-wall skip
+```
+
+Example — restore session only:
+
+```bash
+python -m core.scraper --url https://example.com/dashboard --mode single \
+  --session-file sessions/example.json --auth-check-url https://example.com/account
+```
 
 ### Proxies
 
@@ -199,7 +230,9 @@ python -m unittest discover -s tests -p "test_*.py"
 - Respect target terms of service and legal boundaries.
 - Use `--no-robots` only when you are explicitly authorized.
 - Avoid scraping sensitive targets without permission.
-- Store credentials and proxy secrets securely.
+- Store credentials and proxy secrets securely — copy `auth_creds.example.json` to `auth_creds.json` (gitignored).
+- Prefer env vars (`WEBVAC_USER` / `WEBVAC_PASS`) over committing credentials.
+- Optional session encryption: set `WEBVAC_SESSION_KEY` before saving sessions.
 
 ## Current Default Behavior
 
