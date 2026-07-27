@@ -1,199 +1,294 @@
-# WebVac — Architecture Reference
+# WebVac — Full System Architecture
 
-## Overview
-
-**WebVac** is a Python asyncio web scraper that drives real Chromium browsers (via Patchright) to crawl JavaScript-heavy sites, extract structured page data, and export multi-format reports. It includes an optional VAPT/recon pipeline (collectors, analyzers, findings) that is **built but disabled** in the default configuration (`vapt_enabled: False`).
-
-**Elevator pitch:** A stealth browser crawler with proxy rotation, CDN origin bypass, concurrent context pools, and rich HTML/JSON/CSV output — with a security-recon layer ready to re-enable later.
+**Last updated:** 2026-07-27  
+**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [VAPT Pipeline](architecture/VAPT.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
 
 ---
 
-## System Diagram
+## 1. Purpose
 
-See **`docs/webvac-architecture-one-page.html`** (open in browser → Print → Save as PDF) or **`docs/webvac-architecture.pdf`** if generated.
+WebVac is an **asyncio** scraper that drives real Chromium (via **Patchright**) to crawl JavaScript-heavy sites, optionally authenticate, rotate proxies, bypass CDN-to-origin when authorized, and export multi-format historical scan artifacts.
+
+A full **VAPT/recon stack** (collectors → analyzers → findings → active probes) is implemented in-tree but **disabled by default** (`vapt_enabled: False`) and not yet hooked into the main CLI scrape path.
 
 ---
 
-## Layered Architecture
+## 2. High-level system context
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  ENTRY                                                                  │
-│  run.py (menu)  →  core/scraper.py (CLI orchestrator)                   │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-┌───────────────────────────────────▼─────────────────────────────────────┐
-│  CRAWL ENGINE                                                           │
-│  core/crawler.py (BFS)  →  core/page_scrape_flow.py (per-page logic)    │
-│  scope/scope_manager.py  ·  core/pipeline.py (user hooks)                 │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                                    │
-        ┌───────────────────────────┼───────────────────────────┐
-        ▼                           ▼                           ▼
-┌───────────────┐         ┌─────────────────┐         ┌─────────────────┐
-│ BROWSER       │         │ PROXY / ORIGIN  │         │ DATA            │
-│ browser.py    │         │ proxy.py        │         │ html_parser.py  │
-│ browser_pool  │         │ cf_hero.py      │         │ page_record.py  │
-│ detection.py  │         │ origin_probe.py │         │ storage.py      │
-│ screenshot.py │         │ robots.py       │         │ scan_session.py │
-└───────────────┘         └─────────────────┘         └─────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────┐
-│  VAPT PIPELINE (optional — disabled by default)                         │
-│  collectors/ → analyzers/ → findings/ → core/runner.py → recon reports  │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  User["Operator"] --> Run["run.py menu"]
+  User --> CLI["python -m core.scraper"]
+  Run --> CLI
+  CLI --> WebVac["WebVac Runtime"]
+  WebVac --> Target["Target Website"]
+  WebVac --> Proxy["Proxy Pool"]
+  WebVac --> Disk["scraped_data/"]
+  WebVac --> Sess["sessions/ storage_state"]
+  WebVac -.->|optional| CFHero["CF-Hero binary"]
 ```
 
 ---
 
-## Crawl Flow
+## 3. Layered architecture
 
-1. **CLI / menu** parses args (`--url`, `--mode`, `--depth`, `--concurrency`, proxies, etc.).
-2. **ProxyManager** loads proxies, benchmarks latency, picks initial per-slot assignments.
-3. **BrowserManager** launches Chromium with N isolated contexts (one per concurrent worker).
-4. **Crawler** runs BFS from seed URL:
-   - Respects robots.txt, scope, depth, and page limits.
-   - Batches up to `concurrency` pages in parallel via `asyncio.gather`.
-5. **page_scrape_flow** for each URL:
-   - Polite delay → `goto` → challenge wait → bot detection.
-   - On block: stealth retry → CF-Hero auto origin → evasion sequence → optional CAPTCHA prompt.
-   - On success: scroll, extract HTML, build page record, follow internal links.
-6. **Storage** writes JSON, CSV, HTML report, optional diffs vs prior scan.
-7. **AssetDownloader** fetches PDFs and source maps discovered during crawl.
+```mermaid
+flowchart TB
+  subgraph entry [Entry Layer]
+    RunPy[run.py]
+    Scraper[core/scraper.py]
+  end
 
----
+  subgraph authLayer [Auth Layer]
+    AM[auth/manager.py]
+    Engines[auth engines + session]
+  end
 
-## Module Reference
+  subgraph crawlLayer [Crawl Layer]
+    Crawler[core/crawler.py]
+    Flow[core/page_scrape_flow.py]
+    Scope[scope/scope_manager.py]
+    Pipe[core/pipeline.py]
+  end
 
-### Entry & config
+  subgraph browserLayer [Browser & Resilience]
+    BM[utils/browser.py]
+    Pool[utils/browser_pool.py]
+    Det[utils/detection.py]
+    Cap[utils/screenshot.py]
+  end
 
-| Module | Purpose |
-|--------|---------|
-| `run.py` | Interactive menu launcher |
-| `core/scraper.py` | Main CLI: setup, crawl, persist |
-| `config/config.py` | Default settings |
-| `config/scan_profiles.py` | VAPT profile presets |
+  subgraph netLayer [Network Policy]
+    Proxy[utils/proxy.py]
+    Robots[utils/robots.py]
+    Origin[utils/origin_probe.py]
+    CF[utils/cf_hero.py]
+  end
 
-### Crawl engine
+  subgraph dataLayer [Data Layer]
+    Parse[data/html_parser.py]
+    Rec[data/page_record.py]
+    Store[data/storage.py]
+    Scan[store/scan_session.py]
+    Assets[utils/asset_downloader.py]
+  end
 
-| Module | Purpose |
-|--------|---------|
-| `core/crawler.py` | BFS crawler, session init, slot proxies |
-| `core/page_scrape_flow.py` | Dynamic per-page scrape, retries, evasion |
-| `core/pipeline.py` | User `process_item()` data hooks |
-| `scope/scope_manager.py` | Domain/URL scope and limits |
-| `graph/endpoint_graph.py` | Page link graph (VAPT) |
+  subgraph vaptLayer [VAPT Overlay — default OFF]
+    Coll[collectors/]
+    Ana[analyzers/]
+    Find[findings/]
+    Active[active/]
+    Runner[core/runner.py]
+  end
 
-### Browser & anti-block
-
-| Module | Purpose |
-|--------|---------|
-| `utils/browser.py` | Patchright lifecycle, stealth, CAPTCHA UI |
-| `utils/browser_pool.py` | Per-slot browser contexts |
-| `utils/detection.py` | WAF/challenge detection |
-| `utils/proxy.py` | Proxy pool, rotation, cool-down |
-| `utils/cf_hero.py` | CF-Hero CLI integration |
-| `utils/origin_probe.py` | Host-header origin validation |
-| `models/origin.py` | OriginTarget dataclass |
-| `utils/robots.py` | robots.txt handling |
-| `utils/screenshot.py` | Block-page screenshots |
-
-### Data & output
-
-| Module | Purpose |
-|--------|---------|
-| `data/html_parser.py` | HTML → structured dict |
-| `data/page_record.py` | Page record builder |
-| `data/storage.py` | JSON, CSV, HTML, SQLite, diffs |
-| `store/scan_session.py` | Historical scan folder layout |
-| `utils/asset_downloader.py` | PDF & source map downloads |
-| `models/scan.py` | Scan/target metadata |
-
-### Auth
-
-| Module | Purpose |
-|--------|---------|
-| `auth/auth.py` | Login, session cookie save/restore |
-
-### VAPT (disabled by default)
-
-| Module | Purpose |
-|--------|---------|
-| `collectors/` | HTTP, HTML, JS, network, storage capture |
-| `analyzers/` | Headers, cookies, OAuth, GraphQL, tech, etc. |
-| `findings/` | Security rule engine |
-| `active/` | Active file/GraphQL/swagger probes |
-| `core/runner.py` | Post-crawl analysis orchestrator |
-| `store/artifact_store.py` | Per-page artifact store |
-
----
-
-## Output Layout
-
+  RunPy --> Scraper
+  Scraper --> AM
+  Scraper --> Crawler
+  AM --> Engines
+  AM --> BM
+  Crawler --> Flow
+  Crawler --> Scope
+  Flow --> BM
+  Flow --> Det
+  Flow --> AM
+  Crawler --> Proxy
+  Crawler --> Robots
+  Crawler --> Origin
+  Crawler --> CF
+  Flow --> Parse
+  Parse --> Rec
+  Rec --> Pipe
+  Pipe --> Store
+  Store --> Scan
+  Crawler --> Assets
+  Crawler -.-> Coll
+  Coll -.-> Ana
+  Ana -.-> Find
+  Find -.-> Active
+  Runner -.-> Store
 ```
+
+---
+
+## 4. End-to-end runtime sequence
+
+```mermaid
+sequenceDiagram
+  participant U as Operator
+  participant S as scraper.run
+  participant P as ProxyManager
+  participant B as BrowserManager
+  participant A as AuthManager
+  participant C as Crawler
+  participant F as page_scrape_flow
+  participant St as Storage
+
+  U->>S: CLI / run.py args
+  S->>P: load + optional benchmark
+  S->>B: start N slots
+  opt login / session / bootstrap
+    S->>A: restore | login | bootstrap
+    A->>B: broadcast storage_state
+  end
+  S->>C: scrape_single | scrape_site
+  loop each URL batch
+    C->>F: run_page_scrape(url, slot)
+    F->>B: new_page + goto
+    F->>A: auth-wall check if authed
+    F-->>C: page record dict
+  end
+  S->>St: save formats + diffs
+  S->>B: stop
+```
+
+---
+
+## 5. Package map
+
+| Package | Responsibility |
+|---------|----------------|
+| `run.py` | Interactive launcher → builds argv → invokes scraper |
+| `core/` | CLI orchestration, BFS crawler, per-page flow, user pipelines, VAPT runner |
+| `auth/` | Login, sessions, MFA, walls, profiles |
+| `utils/` | Browser pool, proxies, robots, detection, CF-Hero, screenshots, assets |
+| `data/` | HTML parse, page records, multi-format export, recon report writer |
+| `config/` | Defaults + VAPT scan profiles |
+| `scope/` | Domain / depth / URL allow-deny |
+| `store/` | Scan folder layout + artifact store |
+| `models/` | Typed artifacts, findings, intelligence, scan metadata |
+| `collectors/` | VAPT page/session collectors (plugin discovery) |
+| `analyzers/` | VAPT intelligence extractors |
+| `findings/` | Rule engine → security findings |
+| `active/` | Opt-in active probes |
+| `intelligence/` | Deduped observation store |
+| `graph/` | Endpoint parent/child graph |
+| `tests/` | Unit + e2e coverage |
+| `docs/` | Architecture & change docs |
+
+---
+
+## 6. Two pipelines (do not confuse)
+
+| Pipeline | Module | Status |
+|----------|--------|--------|
+| **User scrape pipeline** | `core/pipeline.py` (`PipelineManager`) | **Active** — `--pipeline-file` mutates page dicts before save |
+| **VAPT recon pipeline** | `core/runner.py` (`PipelineRunner`) | **Built, default OFF, not CLI-wired** |
+
+---
+
+## 7. Configuration spine
+
+```mermaid
+flowchart LR
+  Defaults["config/config.py DEFAULT_CONFIG"] --> Session["session_config dict"]
+  CLI["argparse in scraper"] --> Session
+  Profiles["scan_profiles.py"] -.->|VAPT only| Session
+  Session --> Crawler
+  Session --> Collectors
+  Session --> Analyzers
+```
+
+Important defaults:
+
+- `vapt_enabled: False`
+- Scrape formats: `json,csv,html`
+- Crawl respects robots unless `--no-robots`
+- Auth wall policy default: `skip`
+
+---
+
+## 8. On-disk output model
+
+```text
 scraped_data/
   <domain>_<target_id>/
     scans/
-      <YYYYMMDD_HHMMSS>_<scan_id>/
-        scrape/       data.json, data.csv, report.html
-        recon/        findings (VAPT)
-        artifacts/    raw collector output
-        assets/       pdfs/, sourcemaps/, screenshots/
-        meta/         session.json, meta.json
-    diffs/            diff vs previous scan
+      <timestamp>_<scan_id>/
+        scrape/       # data.json, data.csv, report.html, …
+        recon/        # VAPT (when enabled + wired)
+        artifacts/    # VAPT raw artifacts
+        assets/
+          pdfs/
+          sourcemaps/
+          screenshots/
+        meta/
+          meta.json
+          session.json
+    diffs/
+      diff_<scan>.json | .md
 ```
 
----
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| Real browser (Patchright) | Renders SPAs, survives JS challenges |
-| Context pool per concurrency | Safe parallel crawl with isolated proxies |
-| Pinned proxy identity | UA + Sec-CH-UA match proxy fingerprint |
-| Layered bot handling | Challenge wait → retry → CF-Hero → evasion → CAPTCHA |
-| BFS + scope manager | Predictable crawl with guardrails |
-| Dual scrape/VAPT paths | Same crawler; VAPT toggled via config |
-| Versioned scan sessions | Historical runs + diffs |
+Sessions (auth) live separately under `sessions/` (gitignored).
 
 ---
 
-## Current Status
+## 9. Concurrency model
+
+```mermaid
+flowchart TB
+  Seed[Seed URL] --> Queue[BFS deque]
+  Queue --> Batch["Batch size = concurrency"]
+  Batch --> S0[Slot 0 context]
+  Batch --> S1[Slot 1 context]
+  Batch --> SN[Slot N context]
+  S0 --> Recs[Page records]
+  S1 --> Recs
+  SN --> Recs
+  Recs --> Visited[visited + enqueue internal links]
+  Visited --> Queue
+```
+
+Each **slot** = isolated browser context with:
+
+- Own proxy (optional)
+- Own UA / Client Hints identity
+- Shared auth `storage_state` after login (broadcast)
+
+Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no voluntary rotate).
+
+---
+
+## 10. Feature status matrix
 
 | Feature | Status |
 |---------|--------|
-| Single-page & BFS crawl | ✅ Active |
-| Proxy rotation & health-check | ✅ Active |
-| Concurrent context pool | ✅ Active |
-| CF-Hero / origin bypass | ✅ Active |
-| JSON / CSV / HTML output | ✅ Active |
-| PDF & source map download | ✅ Active |
-| Login + session cookies | ✅ Active |
-| VAPT pipeline | ⏸ Disabled |
+| Single-page + BFS crawl | Active |
+| Concurrent browser slots | Active |
+| Proxy pool + health + sticky | Active |
+| Robots + delays | Active |
+| AuthManager (Patchright / Nodriver) | Active |
+| Session restore / TTL / Fernet | Active |
+| Mid-crawl auth-wall policy | Active |
+| CF-Hero / origin Host bypass | Active |
+| Bot detection + CAPTCHA prompt | Active |
+| Multi-format export + diffs | Active |
+| PDF / sourcemap download | Active |
+| User `PipelineManager` | Active |
+| Collectors / analyzers / findings | Implemented, default OFF |
+| `PipelineRunner` in CLI | Not wired |
+| `api_fuzzer` | Not implemented |
 
 ---
 
-## Tech Stack
+## 11. Design principles
 
-Python 3.12+ · asyncio · Patchright · aiohttp · BeautifulSoup/lxml · tqdm · colorama
-
----
-
-## Quick Start
-
-```bash
-python run.py                                          # interactive menu
-python -m core.scraper --url https://example.com --mode single
-python -m core.scraper --url https://example.com --mode crawl --depth 3 --max-pages 50 --concurrency 2
-```
+1. **Scrape spine first** — browser crawl + page records must work without VAPT.
+2. **Auth is a facade** — engines stay swappable behind `AuthManager`.
+3. **Slot isolation** — concurrency via contexts, not tabs in one profile.
+4. **Additive CLI** — new flags never break existing `--login` / `--session-file`.
+5. **Security gated** — VAPT and active probes stay opt-in.
+6. **Historical scans** — every run is a versioned session with optional diffs.
 
 ---
 
-## Generate PDF Diagram
+## 12. Module architecture index
 
-```bash
-python scripts/generate_architecture_pdf.py
-```
+| Doc | Focus |
+|-----|-------|
+| [architecture/AUTH.md](architecture/AUTH.md) | Login, sessions, MFA, walls, bootstrap |
+| [architecture/CRAWL.md](architecture/CRAWL.md) | Crawler, page flow, browser pool |
+| [architecture/DATA.md](architecture/DATA.md) | Parse, records, storage, scan layout |
+| [architecture/PROXY_ORIGIN.md](architecture/PROXY_ORIGIN.md) | Proxies, robots, CF-Hero, origin |
+| [architecture/VAPT.md](architecture/VAPT.md) | Collectors → analyzers → findings |
 
-Or open `docs/webvac-architecture-one-page.html` in a browser and use **Print → Save as PDF** (landscape, fit to one page).
+Open the visual one-pager: [`webvac-architecture-one-page.html`](webvac-architecture-one-page.html).
