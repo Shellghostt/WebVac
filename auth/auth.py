@@ -18,10 +18,12 @@ Features
 import asyncio
 import json
 import os
+import re
 from typing import Optional
 
 from patchright.async_api import Page, BrowserContext
 from config.config import DEFAULT_CONFIG
+from auth.popups import dismiss_popups_patchright
 
 
 # ── Common selector patterns ──────────────────────────────────────────────────
@@ -49,6 +51,8 @@ PASSWORD_SELECTORS = [
 ]
 
 SUBMIT_SELECTORS = [
+    'form button[type="submit"]',
+    'form input[type="submit"]',
     'button[type="submit"]',
     'input[type="submit"]',
     'button:has-text("Log in")',
@@ -59,6 +63,13 @@ SUBMIT_SELECTORS = [
     '[role="button"]:has-text("Log in")',
     '[role="button"]:has-text("Sign in")',
 ]
+
+# Never treat these as the site's password-login submit button
+_SSO_TEXT_RE = re.compile(
+    r"google|gmail|facebook|github|apple|microsoft|linkedin|"
+    r"sso|oauth|continue with|sign in with",
+    re.I,
+)
 
 # Selectors that suggest a CAPTCHA or 2FA challenge appeared
 CAPTCHA_SELECTORS = [
@@ -126,6 +137,10 @@ class AuthHandler:
         if not await self._goto_safe(page, login_url, timeout, wait_until):
             return False
 
+        n = await dismiss_popups_patchright(page, rounds=4)
+        if n:
+            print(f"[Auth] Dismissed {n} cookie/privacy popup control(s)")
+
         username_field = await self._find_element(page, USERNAME_SELECTORS, timeout=3000)
         if not username_field:
             print("[Auth] Could not find username/email field.")
@@ -162,6 +177,10 @@ class AuthHandler:
         print(f"[Auth] Logging in with custom selectors at: {login_url}")
         if not await self._goto_safe(page, login_url, timeout, wait_until):
             return False
+
+        n = await dismiss_popups_patchright(page, rounds=4)
+        if n:
+            print(f"[Auth] Dismissed {n} cookie/privacy popup control(s)")
 
         try:
             await page.fill(username_selector, username)
@@ -327,11 +346,26 @@ class AuthHandler:
         return True
 
     async def _find_element(self, page: Page, selectors: list, timeout: int = 2000):
-        """Try each selector and return the first visible, enabled element."""
+        """Try each selector and return the first visible, enabled, non-SSO element."""
         for sel in selectors:
             try:
-                el = page.locator(sel).first
-                if await el.is_visible(timeout=timeout) and await el.is_enabled(timeout=timeout):
+                loc = page.locator(sel)
+                count = await loc.count()
+                for i in range(min(count, 8)):
+                    el = loc.nth(i)
+                    if not (await el.is_visible(timeout=timeout) and await el.is_enabled(timeout=timeout)):
+                        continue
+                    try:
+                        text = (await el.inner_text(timeout=500) or "").strip()
+                    except Exception:
+                        text = ""
+                    try:
+                        aria = (await el.get_attribute("aria-label")) or ""
+                    except Exception:
+                        aria = ""
+                    blob = f"{text} {aria} {sel}"
+                    if _SSO_TEXT_RE.search(blob):
+                        continue
                     return el
             except Exception:
                 continue
