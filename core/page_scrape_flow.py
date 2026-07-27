@@ -61,6 +61,43 @@ async def run_page_scrape(
             status = response.status if response else 200
 
             bot_detected = await crawler._after_goto(page, response)
+
+            # Mid-crawl auth-wall detection (behind login wall)
+            if not bot_detected and (
+                crawler.auth_manager
+                or crawler.session_config.get("authenticated")
+            ):
+                try:
+                    from auth.wall import apply_wall_policy, is_auth_wall_page
+                    wall_hit = False
+                    if crawler.auth_manager:
+                        wall_hit = await crawler.auth_manager.is_auth_wall(page)
+                    else:
+                        wall_hit = await is_auth_wall_page(page)
+                    if wall_hit:
+                        policy = apply_wall_policy(
+                            crawler.session_config.get("on_auth_wall", "skip")
+                        )
+                        tqdm.write(
+                            f"[Auth] Auth wall at {url} — policy={policy}"
+                        )
+                        await page.close()
+                        if policy == "abort":
+                            raise RuntimeError(f"Auth wall abort at {url}")
+                        if policy == "relogin" and crawler.auth_manager:
+                            ok = await crawler.auth_manager.login(
+                                seed_url=crawler._seed_url or url,
+                            )
+                            if ok:
+                                continue  # retry page after relogin
+                            return None
+                        # skip
+                        return None
+                except RuntimeError:
+                    raise
+                except Exception as wall_exc:
+                    tqdm.write(f"[Auth] Auth-wall check error: {wall_exc}")
+
             if bot_detected:
                 if crawler.proxy_manager and proxy_entry:
                     crawler.proxy_manager.mark_failure(proxy_entry, transient=True)

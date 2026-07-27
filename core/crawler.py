@@ -75,7 +75,7 @@ class Crawler:
         captcha_prompt_enabled: bool = True,
         sticky_requests: int = DEFAULT_CONFIG["sticky_requests"],
         recon_config: Optional[dict[str, Any]] = None,
-
+        auth_manager=None,
     ):
         self.browser = browser
         self.page_builder = PageRecordBuilder(
@@ -87,6 +87,7 @@ class Crawler:
         self.engine = engine
         self.captcha_prompt_enabled = captcha_prompt_enabled
         self.sticky_requests = sticky_requests
+        self.auth_manager = auth_manager
 
         self.max_depth = max_depth
         self.max_pages = max_pages
@@ -484,6 +485,12 @@ class Crawler:
             self.endpoint_graph = None
 
     def _url_ok_for_crawl(self, url: str, origin: str) -> bool:
+        if self.session_config.get("deny_logout_urls") or (
+            self.auth_manager and self.auth_manager.authenticated
+        ):
+            from auth.wall import is_logout_url
+            if is_logout_url(url):
+                return False
         if self.scope_manager and not self.scope_manager.scope.is_url_in_scope(url):
             return False
         if self._origin:
@@ -726,6 +733,14 @@ class Crawler:
                 pinned_platform=next_proxy.pinned_platform or None,
                 pinned_sec_ch_ua=next_proxy.pinned_sec_ch_ua or None,
             )
+            # Re-verify auth after forced rotate when authenticated
+            if self.auth_manager and self.auth_manager.authenticated:
+                check = self.session_config.get("auth_check_url")
+                if check:
+                    ok = await self.auth_manager.verify(check)
+                    if not ok:
+                        tqdm.write("[Auth] Session lost after proxy rotate — attempting relogin...")
+                        await self.auth_manager.login(seed_url=self._seed_url or check)
             tqdm.write(
                 f"[Proxy]  Active: {next_proxy.server}  ({self.proxy_manager.status()})"
             )
@@ -737,6 +752,11 @@ class Crawler:
         Does NOT mark the current proxy as failed (positive rotation, not a failure).
         """
         if not self.proxy_manager:
+            return
+        if self.session_config.get("auth_pin_proxy") or (
+            self.auth_manager and self.auth_manager.authenticated
+        ):
+            tqdm.write("[Proxy] [Sticky] Skipped — auth session is pinned to current proxy.")
             return
 
         async with self._proxy_lock:
