@@ -37,11 +37,13 @@ import asyncio
 import argparse
 import os
 import sys
+from typing import Optional
 
 from colorama import init, Fore, Style
 from utils.browser import BrowserManager
 from core.crawler import Crawler
-from auth.auth import AuthHandler
+from auth.manager import AuthManager, build_profile_from_args
+from auth.credentials import resolve_credentials
 from data.storage import Storage
 from config.config import DEFAULT_CONFIG
 from utils.robots import RobotsHandler
@@ -102,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Login / Auth
     p.add_argument("--login",      action="store_true", help="Enable login before scraping.")
+    p.add_argument(
+        "--auth-engine",
+        choices=["patchright", "nodriver"],
+        default="patchright",
+        help="Authentication engine. patchright (default) or nodriver (auth-only).",
+    )
     p.add_argument("--login-url",  default=None,        help="URL of the login page (defaults to --url).")
     p.add_argument("--username",   default=None,        help="Login username or email.")
     p.add_argument("--password",   default=None,        help="Login password.")
@@ -109,14 +117,65 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--password-selector", default=None, help="CSS selector for password field (optional override).")
     p.add_argument("--submit-selector",   default=None, help="CSS selector for submit button (optional override).")
     p.add_argument(
+        "--dismiss-selector",
+        action="append",
+        default=None,
+        metavar="CSS",
+        help=(
+            "Extra CSS selector for cookie/privacy Accept buttons (can repeat). "
+            "Tried before built-in OneTrust/Cookiebot/etc. patterns."
+        ),
+    )
+    p.add_argument(
         "--session-file",
         default=None,
         metavar="FILE",
         help=(
-            "Path to a session cookie file. If the file exists, cookies are loaded "
+            "Path to a session storage_state file. If the file exists, cookies are loaded "
             "and login is skipped. After a successful --login the session is saved here "
             "for future runs."
         ),
+    )
+    p.add_argument(
+        "--auth-check-url",
+        default=None,
+        metavar="URL",
+        help="Protected URL used to verify login/session is authenticated.",
+    )
+    p.add_argument(
+        "--on-auth-wall",
+        choices=["abort", "skip", "relogin"],
+        default="skip",
+        help="When a login wall is hit mid-crawl: abort, skip page, or relogin (default: skip).",
+    )
+    p.add_argument(
+        "--session-ttl",
+        type=int,
+        default=0,
+        metavar="SECS",
+        help="Session TTL in seconds (0 = never expire). Checked on restore.",
+    )
+    p.add_argument(
+        "--auth-bootstrap",
+        action="store_true",
+        help="Open a visible browser for manual OAuth/SSO login, then export --session-file.",
+    )
+    p.add_argument(
+        "--otp-prompt",
+        action="store_true",
+        help="Prompt for OTP/MFA codes during login when an OTP field appears.",
+    )
+    p.add_argument(
+        "--auth-profile",
+        default=None,
+        metavar="FILE",
+        help="Rich auth credentials/profile JSON (steps, totp, selectors, policies).",
+    )
+    p.add_argument(
+        "--no-auth-proxy-rotate",
+        action="store_true",
+        default=False,
+        help="When logging in, disable voluntary proxy rotation to keep the session IP stable.",
     )
 
     # Output
@@ -487,6 +546,7 @@ async def run(args):
     print(f"  URL         : {args.url}")
     print(f"  Mode        : {args.mode}")
     print(f"  Login       : {'yes' if args.login else 'no'}")
+    print(f"  Auth Engine : {args.auth_engine}")
     print(f"  Robots      : {'disabled (--no-robots)' if args.no_robots else 'enabled'}")
     proxy_label = (
         args.proxy_file or
@@ -605,49 +665,94 @@ async def run(args):
     )
 
     try:
-        # ── Session restore (skips re-login if cookie file exists) ───────────
-        auth = AuthHandler()
-        session_restored = False
-        if args.session_file and os.path.isfile(args.session_file):
-            session_restored = await auth.restore_session(
-                browser.context, args.session_file
+        # ── Auth (restore / login / bootstrap) via AuthManager ───────────────
+        needs_auth = bool(
+            args.login
+            or args.auth_bootstrap
+            or (args.session_file and os.path.isfile(args.session_file))
+            or args.auth_profile
+        )
+        auth_manager = None
+        authenticated = False
+
+        if needs_auth or args.login or args.auth_bootstrap:
+            # Force dynamic engine when authenticating
+            if args.login or args.auth_bootstrap:
+                if args.engine == "lightweight":
+                    print(
+                        f"{Fore.YELLOW}[Auth] Forcing engine=dynamic because login/bootstrap "
+                        f"requires a browser session.{Style.RESET_ALL}"
+                    )
+                    args.engine = "dynamic"
+
+            profile = build_profile_from_args(args, profile_path=args.auth_profile)
+            # Env credential fallback already applied in build_profile_from_args
+            if args.otp_prompt:
+                profile.otp_prompt = True
+            if args.on_auth_wall:
+                profile.on_auth_wall = args.on_auth_wall
+            if args.session_ttl:
+                profile.session_ttl = args.session_ttl
+            if args.auth_check_url:
+                profile.auth_check_url = args.auth_check_url
+
+            auth_manager = AuthManager(
+                browser,
+                profile=profile,
+                concurrency=args.concurrency,
+                headless=not args.no_headless,
+                timeout=args.timeout,
+                wait_until=args.wait_until,
             )
-            if session_restored:
-                print(f"{Fore.GREEN}[Auth] Session restored from {args.session_file} — skipping login.{Style.RESET_ALL}")
 
-        # ── Login ─────────────────────────────────────────────────────────────
-        if args.login and not session_restored:
-            if not args.username or not args.password:
-                print(f"{Fore.RED}[Error] --username and --password are required with --login{Style.RESET_ALL}")
-                return
-
-            login_page = await browser.new_page()
-            login_url = args.login_url or args.url
-
-            if args.username_selector and args.password_selector:
-                success = await auth.login_with_selectors(
-                    login_page, login_url,
-                    args.username, args.password,
-                    args.username_selector, args.password_selector,
-                    args.submit_selector,
-                    timeout=args.timeout,
-                    wait_until=args.wait_until,
+            if args.auth_bootstrap:
+                if not args.session_file:
+                    print(f"{Fore.RED}[Auth] --auth-bootstrap requires --session-file{Style.RESET_ALL}")
+                    return
+                if not args.no_headless:
+                    print(
+                        f"{Fore.YELLOW}[Auth] Tip: use --no-headless with --auth-bootstrap "
+                        f"so you can complete OAuth visually.{Style.RESET_ALL}"
+                    )
+                bootstrap_url = args.login_url or args.url
+                ok = await auth_manager.bootstrap_manual(
+                    url=bootstrap_url, session_file=args.session_file,
                 )
+                if not ok:
+                    print(f"{Fore.RED}[Auth] Bootstrap failed.{Style.RESET_ALL}")
+                    return
+                authenticated = True
             else:
-                success = await auth.login(
-                    login_page, login_url,
-                    args.username, args.password,
-                    timeout=args.timeout,
-                    wait_until=args.wait_until,
-                )
+                restored = False
+                if profile.session_file and os.path.isfile(profile.session_file):
+                    restored = await auth_manager.restore(profile.session_file)
+                    if restored:
+                        print(
+                            f"{Fore.GREEN}[Auth] Session restored — skipping login."
+                            f"{Style.RESET_ALL}"
+                        )
+                        authenticated = True
 
-            await login_page.close()
-
-            if success and args.session_file:
-                await auth.save_session(browser.context, args.session_file)
-
-            if not success:
-                print(f"{Fore.YELLOW}[Warning] Login may have failed -- continuing anyway.{Style.RESET_ALL}")
+                if args.login and not restored:
+                    user, pw = resolve_credentials(profile.username, profile.password)
+                    if not user or not pw:
+                        print(
+                            f"{Fore.RED}[Error] Username/password required "
+                            f"(--username/--password, auth profile, or WEBVAC_USER/WEBVAC_PASS)"
+                            f"{Style.RESET_ALL}"
+                        )
+                        return
+                    profile.username = user
+                    profile.password = pw
+                    ok = await auth_manager.login(seed_url=args.url)
+                    if not ok:
+                        print(
+                            f"{Fore.YELLOW}[Warning] Login may have failed — continuing anyway."
+                            f"{Style.RESET_ALL}"
+                        )
+                    else:
+                        authenticated = True
+                        print(f"{Fore.GREEN}[Auth] Login successful.{Style.RESET_ALL}")
 
         # ── Crawl / Scrape ────────────────────────────────────────────────────
         # ScreenshotModule (CAPTCHA pages only)
@@ -675,6 +780,24 @@ async def run(args):
         if origin_target:
             session_config["origin_access"] = origin_target.to_dict()
 
+        # Auth crawl policies
+        pin_proxy = bool(args.login or args.auth_bootstrap or authenticated)
+        if args.no_auth_proxy_rotate or pin_proxy:
+            # Default: pin proxy when authenticated unless user overrides later
+            session_config["auth_pin_proxy"] = True
+        if authenticated or args.login:
+            session_config["authenticated"] = True
+            session_config["on_auth_wall"] = args.on_auth_wall
+            session_config["auth_check_url"] = args.auth_check_url
+            session_config["deny_logout_urls"] = True
+            # Avoid voluntary sticky rotate killing the session IP
+            if session_config.get("auth_pin_proxy"):
+                sticky_requests = 0
+            else:
+                sticky_requests = args.sticky_requests
+        else:
+            sticky_requests = args.sticky_requests
+
         crawler = Crawler(
             browser=browser,
             max_depth=args.depth,
@@ -696,8 +819,9 @@ async def run(args):
             pipeline_manager=pipeline_manager,
             engine=args.engine,
             captcha_prompt_enabled=not args.no_captcha_prompt,
-            sticky_requests=args.sticky_requests,
+            sticky_requests=sticky_requests,
             recon_config=session_config,
+            auth_manager=auth_manager,
         )
 
         crawler.init_slot_proxies(slot_entries)
