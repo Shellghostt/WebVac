@@ -207,9 +207,14 @@ scraped_data/
 
 ## Architecture Docs
 
-- `docs/ARCHITECTURE.md`: Detailed architectural reference
-- `docs/webvac-architecture-one-page.html`: One-page visual architecture
-- `docs/webvac-architecture.pdf`: Exported PDF architecture diagram
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Full system architecture (layers, sequence, status matrix)
+- [`docs/architecture/AUTH.md`](docs/architecture/AUTH.md) — Authentication / sessions / MFA / auth-walls
+- [`docs/architecture/CRAWL.md`](docs/architecture/CRAWL.md) — Crawler, page flow, browser pool
+- [`docs/architecture/DATA.md`](docs/architecture/DATA.md) — Parsing, page records, storage layout
+- [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, CF-Hero / origin
+- [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md) — Optional collectors → analyzers → findings
+- [`docs/CHANGES_AND_IMPROVEMENTS.md`](docs/CHANGES_AND_IMPROVEMENTS.md) — Recent changes + improvement ideas
+- [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — One-page visual architecture
 
 To regenerate architecture PDF:
 
@@ -260,6 +265,10 @@ python -m unittest discover -s tests -p "test_*.py"
 - Increase timeout.
 - Crawl deeper with higher `--depth`.
 - Verify selectors if using targeted extraction options.
+
+## Contributors
+
+- [Adityaaa](https://github.com/Shellghostt) — author & maintainer
 
 ## Contributing Workflow
 
