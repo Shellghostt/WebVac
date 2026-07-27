@@ -364,6 +364,10 @@ class BrowserManager:
         self._session_location: tuple = self._pick_location()
         self._session_viewport: dict = self._pick_viewport()
 
+        # Auth session — re-injected after context recreate / proxy rotate
+        self._auth_cookies: list[dict] = []
+        self._auth_storage_state: Optional[dict] = None
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def start(
@@ -569,6 +573,7 @@ class BrowserManager:
                 sec_ch_ua=self._session_sec_ch_ua,
             ),
         )
+        await self._reinject_auth_into_slot(slot)
         label = proxy["server"] if proxy else "direct (no proxy)"
         print(f"[Browser] Slot {slot} rotated → {label}")
 
@@ -584,6 +589,7 @@ class BrowserManager:
         engine = getattr(self, "engine", "patchright")
         await self._shutdown_current()
         await self._launch(engine)
+        await self.broadcast_auth_session()
 
     async def new_page(self, slot: int = 0):
         """Open a new tab in an isolated pool slot."""
@@ -612,11 +618,141 @@ class BrowserManager:
         """Inject saved cookies into a pool slot."""
         ctx = self.context if not self._slots else self._slots[slot % self._pool_size].context
         if cookies and ctx:
-            await ctx.add_cookies(cookies)
+            await ctx.add_cookies(self._normalize_cookies(cookies))
 
     async def get_cookies(self, slot: int = 0) -> list:
         ctx = self.context if not self._slots else self._slots[slot % self._pool_size].context
         return await ctx.cookies() if ctx else []
+
+    def set_auth_session(
+        self,
+        cookies: Optional[list] = None,
+        storage_state: Optional[dict] = None,
+    ) -> None:
+        """Remember authenticated session for re-injection after context recreate."""
+        if cookies is not None:
+            self._auth_cookies = self._normalize_cookies(cookies)
+        if storage_state is not None:
+            self._auth_storage_state = storage_state
+
+    async def capture_auth_session(self, slot: int = 0) -> list[dict]:
+        """Snapshot cookies (+ storage state) from a live authenticated slot."""
+        cookies = await self.get_cookies(slot=slot)
+        storage_state = None
+        try:
+            ctx = self._slots[slot % self._pool_size].context if self._slots else self._context
+            if ctx:
+                storage_state = await ctx.storage_state()
+        except Exception:
+            pass
+        self.set_auth_session(cookies=cookies, storage_state=storage_state)
+        return list(self._auth_cookies)
+
+    async def broadcast_auth_session(self) -> int:
+        """Inject remembered auth cookies into every pool slot. Returns cookie count."""
+        if not self._auth_cookies and not self._auth_storage_state:
+            return 0
+        n_slots = max(1, self._pool_size if self._slots else 1)
+        for slot in range(n_slots):
+            await self._reinject_auth_into_slot(slot)
+        count = len(self._auth_cookies)
+        print(f"[Browser] Auth session broadcast to {n_slots} slot(s) ({count} cookies)")
+        return count
+
+    async def _reinject_auth_into_slot(self, slot: int) -> None:
+        if not self._slots:
+            return
+        bs = self._slots[slot % self._pool_size]
+        if not bs.context:
+            return
+        cookies = self._auth_cookies
+        if not cookies and self._auth_storage_state:
+            cookies = self._auth_storage_state.get("cookies") or []
+        if cookies:
+            try:
+                await bs.context.add_cookies(self._normalize_cookies(cookies))
+            except Exception as exc:
+                print(f"[Browser] Warning: cookie reinject slot {slot} failed: {exc}")
+        # Restore localStorage / sessionStorage origins when available
+        origins = (self._auth_storage_state or {}).get("origins") or []
+        if origins:
+            await self._inject_origins_storage(bs.context, origins)
+
+    async def _inject_origins_storage(self, context, origins: list) -> None:
+        """Best-effort restore of localStorage from Playwright storage_state origins."""
+        for origin in origins:
+            origin_url = origin.get("origin")
+            local = (origin.get("localStorage") or [])
+            if not origin_url or not local:
+                continue
+            pairs = [
+                (e.get("name"), e.get("value"))
+                for e in local
+                if e.get("name") is not None
+            ]
+            if not pairs:
+                continue
+            page = None
+            try:
+                page = await context.new_page()
+                await page.goto(origin_url, wait_until="domcontentloaded", timeout=15000)
+                await page.evaluate(
+                    """(items) => {
+                        for (const [k, v] of items) {
+                          try { localStorage.setItem(k, v); } catch (e) {}
+                        }
+                    }""",
+                    pairs,
+                )
+            except Exception:
+                pass
+            finally:
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+
+    @staticmethod
+    def _normalize_cookies(cookies: list) -> list[dict]:
+        """Ensure cookies are Playwright add_cookies()-compatible."""
+        out: list[dict] = []
+        for c in cookies or []:
+            if not isinstance(c, dict):
+                continue
+            name, value = c.get("name"), c.get("value")
+            if not name or value is None:
+                continue
+            item: dict = {"name": name, "value": str(value)}
+            if c.get("domain"):
+                item["domain"] = c["domain"]
+            if c.get("path"):
+                item["path"] = c.get("path") or "/"
+            else:
+                item["path"] = "/"
+            if "url" in c and c["url"]:
+                item["url"] = c["url"]
+            # Playwright requires url OR domain
+            if "domain" not in item and "url" not in item:
+                continue
+            if "expires" in c and c["expires"] not in (None, -1, "-1"):
+                try:
+                    item["expires"] = float(c["expires"])
+                except (TypeError, ValueError):
+                    pass
+            if "httpOnly" in c:
+                item["httpOnly"] = bool(c["httpOnly"])
+            if "secure" in c:
+                item["secure"] = bool(c["secure"])
+            same = c.get("sameSite")
+            if same in ("Strict", "Lax", "None"):
+                item["sameSite"] = same
+            elif isinstance(same, str):
+                mapped = {"strict": "Strict", "lax": "Lax", "none": "None"}.get(same.lower())
+                if mapped:
+                    item["sameSite"] = mapped
+            out.append(item)
+        return out
 
     async def stop(self) -> None:
         """Shut down the browser cleanly."""
@@ -752,6 +888,7 @@ class BrowserManager:
         )
         if slot_idx == 0:
             self._context = bs.context
+        await self._reinject_auth_into_slot(slot_idx)
 
     async def _init_pool(self) -> None:
         self._slots = []
