@@ -3,6 +3,8 @@
 | Document | Description |
 |----------|-------------|
 | [STRUCTURE.md](STRUCTURE.md) | Clean repository / `webvac/` package tree |
+| [SESSION_REPORT.md](SESSION_REPORT.md) | Latest session changes, gaps, and next priorities |
+| [BAS_MCP_LINUX_ROADMAP.md](BAS_MCP_LINUX_ROADMAP.md) | Remote BAS / MCP Linux planning |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Full system architecture — layers, runtime sequence, package map, status || [architecture/AUTH.md](architecture/AUTH.md) | AuthManager, engines, sessions, MFA, walls, bootstrap |
 | [architecture/CRAWL.md](architecture/CRAWL.md) | BFS crawler, page_scrape_flow, browser pool, anti-block |
 | [architecture/DATA.md](architecture/DATA.md) | HTML parse, page records, scan layout, exports |
