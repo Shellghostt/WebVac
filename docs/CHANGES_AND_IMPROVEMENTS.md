@@ -9,7 +9,7 @@
 
 ## 1. Summary of what we shipped
 
-This release is a full **Auth Logic Overhaul** (17 features) plus supporting crawl, security, CLI, and docs work. Existing `--login` / `--session-file` / `--auth-engine` flows stay backward-compatible; new flags are additive.
+This release is a full **Auth Logic Overhaul** (17 features) plus supporting crawl, security, CLI, and docs work. Existing `--login` / `--session-file` flows stay backward-compatible; new flags are additive. **Nodriver was later removed** — login is Patchright-only.
 
 ### 1.1 New auth modules (`auth/`)
 
@@ -23,14 +23,14 @@ This release is a full **Auth Logic Overhaul** (17 features) plus supporting cra
 | `wall.py` | Auth-wall heuristics + `abort` \| `skip` \| `relogin` policy; logout URL patterns |
 | `credentials.py` | `WEBVAC_USER` / `WEBVAC_PASS`; CLI redaction helpers |
 | `cookie_audit.py` | HttpOnly / Secure / SameSite warnings (login + VAPT) |
-| `nodriver_auth.py` | Nodriver auth-only login engine |
+| `auth.py` | Patchright login engine |
 | `popups.py` | Cookie/privacy popup dismiss helpers |
 
 Existing engines kept: `auth/auth.py` (Patchright), called by AuthManager.
 
 ### 1.2 Crawl / browser integration
 
-- **`core/scraper.py`**: Login block routed through AuthManager; force `dynamic` engine on login; new CLI flags; auth session policies on crawler config.
+- **`webvac/cli/scraper.py`**: Login block routed through AuthManager; force `dynamic` engine on login; new CLI flags; auth session policies on crawler config.
 - **`core/crawler.py`**: Soft-deny logout URLs when authenticated; skip voluntary proxy rotate when auth-pinned; reinject + re-verify after forced rotate.
 - **`core/page_scrape_flow.py`**: Mid-crawl auth-wall detection with abort/skip/relogin.
 - **`utils/browser.py`**: Capture/broadcast `storage_state` across slots so crawl workers keep the login session.
@@ -59,7 +59,7 @@ Existing engines kept: `auth/auth.py` (Patchright), called by AuthManager.
 **Env:** `WEBVAC_USER`, `WEBVAC_PASS`, `WEBVAC_SESSION_KEY`
 
 - **`run.py`**: Interactive prompts for reuse session / login / OAuth bootstrap, check URL, wall policy, TTL, OTP.
-- **`auth_creds.example.json`**: Full profile schema example.
+- **`examples/auth_creds.example.json`**: Full profile schema example.
 - **`README.md`**: Auth section, examples, security notes.
 - **`tests/test_auth_session.py`**: Unit tests for session store, wall, profile, cookie audit, Fernet, env creds.
 
@@ -92,7 +92,7 @@ Existing engines kept: `auth/auth.py` (Patchright), called by AuthManager.
 3. Add auth-wall heuristics and cookie flag audit helpers  
 4. Add rich auth profiles, multi-step login, and MFA/TOTP helpers  
 5. Add unified AuthManager for login, restore, verify, and bootstrap  
-6. Add Nodriver auth engine and cookie-popup dismiss helpers  
+6. Add cookie-popup dismiss helpers for Patchright auth
 7. Broadcast auth storage_state across browser slots after login  
 8. Add pyotp and cryptography for TOTP and session encryption  
 9. Wire AuthManager and additive auth CLI flags into scraper  
@@ -115,7 +115,7 @@ Ideas are grouped by problem. Prefer **libraries / patterns to borrow** over who
 | Project | Why it helps |
 |---------|----------------|
 | [microsoft/playwright](https://github.com/microsoft/playwright) / Patchright ecosystem | You already use Patchright; keep aligning with Playwright `storage_state`, tracing, and network APIs. |
-| [ultrafunkamsterdam/nodriver](https://github.com/ultrafunkamsterdam/nodriver) | Already used for auth-only; study their CDP patterns for stealthy login. |
+| [ultrafunkamsterdam/nodriver](https://github.com/ultrafunkamsterdam/nodriver) | Previously used for auth-only; **removed** from WebVac. Study CDP patterns only if reintroducing a second engine. |
 | [seleniumbase/SeleniumBase](https://github.com/seleniumbase/SeleniumBase) | UC Mode / CDP Mode ideas for challenge pages; optional fallback engine. |
 | [nicedoc/camoufox](https://github.com/daijro/camoufox) | Firefox-based anti-detect browser; useful when Chromium fingerprints fail. |
 | [rebrowser/rebrowser-patches](https://github.com/rebrowser/rebrowser-patches) | Playwright anti-detect patches; compare with Patchright’s approach. |
@@ -191,7 +191,7 @@ Ideas are grouped by problem. Prefer **libraries / patterns to borrow** over who
 
 - No `--login` → auth behavior unchanged.  
 - Default `--on-auth-wall` is `skip`.  
-- Nodriver remains auth-only; crawl stays Patchright.  
+- Auth is Patchright-only (Nodriver removed); crawl stays Patchright.
 - Do not enable VAPT globally by default.  
 - Never commit real `auth_creds.json` or live session files.
 

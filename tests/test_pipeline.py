@@ -5,12 +5,12 @@ import os
 import tempfile
 import unittest
 
-from data.html_parser import HtmlPageParser
-from data.page_record import PageRecordBuilder
-from models.artifacts import HtmlArtifact, HTTPResponseArtifact
-from models.scan import ScanMetadata, TargetMetadata
-from store.artifact_store import ArtifactStore
-from store.scan_session import ScanSession
+from webvac.data.html_parser import HtmlPageParser
+from webvac.data.page_record import PageRecordBuilder
+from webvac.models.artifacts import HtmlArtifact, HTTPResponseArtifact
+from webvac.models.scan import ScanMetadata, TargetMetadata
+from webvac.store.artifact_store import ArtifactStore
+from webvac.store.scan_session import ScanSession
 
 
 SAMPLE_HTML = (

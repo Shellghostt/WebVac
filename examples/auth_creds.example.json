@@ -1,0 +1,26 @@
+{
+  "username": "your_email@example.com",
+  "password": "your_password_here",
+  "login_url": "https://example.com/login",
+  "session_file": "sessions/example_com_auth.json",
+  "username_selector": "#email",
+  "password_selector": "#password",
+  "submit_selector": "button[type=submit]",
+  "dismiss_selectors": [
+    "#onetrust-accept-btn-handler",
+    "#privacy-accept"
+  ],
+  "auth_check_url": "https://example.com/account",
+  "on_auth_wall": "skip",
+  "session_ttl": 0,
+  "wait_for": "input[type=password]",
+  "totp_secret": null,
+  "otp_prompt": false,
+  "steps": [
+    {"action": "dismiss_popups"},
+    {"action": "wait", "selector": "input[type=password]", "timeout_ms": 10000},
+    {"action": "fill", "selector": "#email", "value": "{{username}}"},
+    {"action": "fill", "selector": "#password", "value": "{{password}}"},
+    {"action": "click", "selector": "button[type=submit]"}
+  ]
+}

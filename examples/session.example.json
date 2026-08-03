@@ -1,0 +1,38 @@
+{
+  "cookies": [
+    {
+      "name": "sessionid",
+      "value": "REPLACE_WITH_REAL_SESSION_VALUE",
+      "domain": ".example.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "csrftoken",
+      "value": "REPLACE_WITH_REAL_CSRF_TOKEN",
+      "domain": ".example.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://example.com",
+      "localStorage": [
+        { "name": "theme", "value": "dark" }
+      ]
+    }
+  ],
+  "_webvac_session_meta": {
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "last_verified_at": "2026-01-01T00:00:00+00:00",
+    "ttl_sec": 0,
+    "seed_url": "https://example.com"
+  }
+}

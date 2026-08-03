@@ -1,0 +1,18 @@
+[
+  {
+    "name": "sessionid",
+    "value": "REPLACE_WITH_REAL_SESSION_VALUE",
+    "domain": ".example.com",
+    "path": "/",
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "csrftoken",
+    "value": "REPLACE_WITH_REAL_CSRF_TOKEN",
+    "domain": ".example.com",
+    "path": "/",
+    "secure": true
+  }
+]

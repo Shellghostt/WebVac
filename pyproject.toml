@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "webvac"
+version = "0.2.0"
+description = "Asyncio dynamic web scraper with auth, CF-Hero origin bypass, and optional VAPT recon."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Adityaaa" }]
+dependencies = [
+  "patchright",
+  "beautifulsoup4==4.12.3",
+  "lxml==5.2.2",
+  "tqdm==4.66.4",
+  "colorama==0.4.6",
+  "aiohttp",
+  "jsbeautifier",
+  "pyotp",
+  "cryptography",
+]
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+webvac = "webvac.cli.scraper:main"
+webvac-menu = "webvac.cli.interactive:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["webvac*"]

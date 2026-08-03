@@ -14,23 +14,23 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Structured output in JSON, CSV, HTML, Markdown, SQLite, or all formats
 - Historical scan sessions and diff generation between runs
 - PDF and sourcemap asset download support
-- Unified auth: Patchright or Nodriver login, session restore, MFA/TOTP, OAuth bootstrap
+- Unified auth: Patchright login, session restore, MFA/TOTP, OAuth bootstrap
 - Mid-crawl auth-wall handling, logout URL deny, and sticky proxy when authenticated
 - Optional VAPT/recon pipeline present in codebase (disabled by default)
 
 ## Project Structure
 
-- `run.py`: Interactive menu launcher
-- `core/scraper.py`: Main CLI entry point and orchestration
-- `core/crawler.py`: BFS crawler logic
-- `core/page_scrape_flow.py`: Per-page execution flow and anti-block handling
-- `auth/`: AuthManager, session store, profiles, MFA, auth-wall detection
-- `utils/`: Browser management, proxies, robots handling, screenshots, origin probing
-- `data/`: HTML parsing, record building, and storage/export pipeline
-- `store/`: Scan session layout and artifact persistence helpers
-- `collectors/`, `analyzers/`, `findings/`, `active/`: Optional security/recon stack
-- `docs/`: Architecture documents and one-page architecture view
-- `tests/`: Unit and integration-like fixture tests
+All application code lives in the installable `webvac/` package. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md).
+
+- `run.py`: Thin shim → interactive menu (`webvac.cli.interactive`)
+- `webvac/cli/scraper.py`: Main CLI orchestrator (`python -m webvac`)
+- `webvac/core/`: BFS crawler, page scrape flow, pipelines, VAPT runner
+- `webvac/auth/`: AuthManager, sessions, MFA, auth-wall detection
+- `webvac/utils/`: Browser, proxies, robots, CF-Hero, screenshots
+- `webvac/data/`: HTML parse, page records, storage/export
+- `webvac/collectors|analyzers|findings|active/`: Optional VAPT stack (default off)
+- `examples/`: Input templates (auth, proxies, session, pipeline) — see [`examples/README.md`](examples/README.md)
+- `docs/`, `tests/`, `scripts/`
 
 ## Requirements
 
@@ -50,6 +50,7 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 python -m venv .venv
 (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& .\.venv\Scripts\Activate.ps1)
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ### Linux/macOS
@@ -58,7 +59,24 @@ pip install -r requirements.txt
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 ```
+
+`pip install -e .` registers the `webvac` and `webvac-menu` console scripts and makes imports resolve as `webvac.*`.
+
+## Example input files
+
+Templates live under [`examples/`](examples/). Copy and edit before use:
+
+| Template | Flag |
+|----------|------|
+| `examples/auth_creds.example.json` | `--auth-profile` / login JSON |
+| `examples/proxies.example.txt` | `--proxy-file` |
+| `examples/session.example.json` | `--session-file` (storage_state) |
+| `examples/session_cookies_legacy.example.json` | `--session-file` (cookie list) |
+| `examples/pipeline.example.py` | `--pipeline-file` |
+
+The interactive menu (`python run.py`) lists these files and shows format hints when you pick session / proxy / credentials / pipeline.
 
 ## Quick Start
 
@@ -66,6 +84,7 @@ pip install -r requirements.txt
 
 ```bash
 python run.py
+# or: webvac-menu
 ```
 
 The launcher helps you choose scrape mode, output formats, robots strategy, proxy mode, and browser visibility.
@@ -73,11 +92,11 @@ The launcher helps you choose scrape mode, output formats, robots strategy, prox
 ### Direct CLI usage
 
 ```bash
-python -m core.scraper --url https://example.com --mode single
+python -m webvac --url https://example.com --mode single
 ```
 
 ```bash
-python -m core.scraper --url https://example.com --mode crawl --depth 3 --max-pages 50 --concurrency 2
+python -m webvac --url https://example.com --mode crawl --depth 3 --max-pages 50 --concurrency 2
 ```
 
 ## Common CLI Options
@@ -114,22 +133,27 @@ python -m core.scraper --url https://example.com --mode crawl --depth 3 --max-pa
 - `--login`: Enable login before scraping (forces `dynamic` engine)
 - `--login-url`: Login page URL
 - `--username`, `--password`: Credentials (or set `WEBVAC_USER` / `WEBVAC_PASS`)
-- `--auth-engine patchright|nodriver`: Browser engine for login only (crawl stays Patchright)
 - `--session-file`: Load/save Playwright `storage_state` (legacy cookie-list files still work)
-- `--auth-profile FILE`: Rich credentials JSON (selectors, steps, TOTP, policies) — see `auth_creds.example.json`
+- `--auth-profile FILE`: Rich credentials JSON (selectors, steps, TOTP, policies) — see `examples/auth_creds.example.json`
 - `--auth-check-url URL`: Protected URL used to verify session after login/restore
 - `--on-auth-wall abort|skip|relogin`: Mid-crawl login-wall policy (default: `skip`)
 - `--session-ttl SECONDS`: Expire saved sessions (0 = never)
 - `--auth-bootstrap`: Open a visible browser for manual OAuth/SSO, then export `--session-file`
 - `--otp-prompt`: Prompt for OTP/MFA when an OTP field appears
 - `--no-auth-proxy-rotate`: Pin proxy while authenticated (also default when `--login`)
+- `--dismiss-selector CSS`: Extra Accept-button selector (repeatable; login + every scrape)
+- `--pause-for-consent`: Headed wait-for-ENTER after first page per host (use with `--no-headless`)
+- `--no-consent-dismiss`: Disable automatic cookie/CMP Accept clicks on scraped pages
+
+Known-site CMP URL bypasses (applied automatically when the host matches): e.g. Deloitte gets `?hidebanner=true`. Google/YouTube get a `CONSENT=YES+` cookie before navigation. Not applied to unknown sites.
+Honeypot links (`display:none`, `visibility:hidden`, common hidden classes) are skipped when discovering crawl links.
 
 Env vars: `WEBVAC_USER`, `WEBVAC_PASS`, optional `WEBVAC_SESSION_KEY` (Fernet-encrypt session files).
 
 Example — login then crawl:
 
 ```bash
-python -m core.scraper --url https://example.com/dashboard --mode crawl \
+python -m webvac --url https://example.com/dashboard --mode crawl \
   --login --login-url https://example.com/login \
   --username you@example.com --password secret \
   --session-file sessions/example.json \
@@ -140,7 +164,7 @@ python -m core.scraper --url https://example.com/dashboard --mode crawl \
 Example — restore session only:
 
 ```bash
-python -m core.scraper --url https://example.com/dashboard --mode single \
+python -m webvac --url https://example.com/dashboard --mode single \
   --session-file sessions/example.json --auth-check-url https://example.com/account
 ```
 
@@ -155,12 +179,21 @@ python -m core.scraper --url https://example.com/dashboard --mode single \
 
 ### Origin bypass / CF-Hero
 
+Requires [CF-Hero](https://github.com/musana/CF-Hero) on PATH (`go install -v github.com/musana/cf-hero/cmd/cf-hero@latest`).
+
 - `--origin-ip IP`: Scrape using origin IP + Host header
-- `--cf-hero`: Discover origin IP via CF-Hero first
+- `--cf-hero`: Discover origin IP via CF-Hero first (uses `-f` tempfile — correct CF-Hero CLI)
 - `--cf-hero-bin PATH`: Explicit CF-Hero executable path
-- `--cf-hero-args "..."`: Additional flags passed to CF-Hero
-- `--origin-title TITLE`: Expected title for origin validation
-- `--skip-origin-validate`: Skip title validation guard
+- `--cf-hero-args "..."`: Extra flags (e.g. `"-shodan -censys -securitytrails -zoomeye"`)
+- `--cf-hero-timeout SECS`: CF-Hero process timeout (default 300)
+- `--cf-hero-workers N`: CF-Hero `-w` worker count
+- `--cf-hero-quiet`: Omit CF-Hero `-v`
+- `--cf-hero-log FILE`: Save raw CF-Hero output
+- `--origin-title TITLE`: Expected title for validation (also passed as CF-Hero `-title`)
+- `--skip-origin-validate`: Use discovered/manual IP without title check
+- `--no-cf-hero-auto`: Disable mid-crawl auto discovery on bot/WAF blocks
+
+See [`docs/architecture/CF_HERO.md`](docs/architecture/CF_HERO.md).
 
 ## Proxy File Format
 
@@ -212,6 +245,7 @@ scraped_data/
 - [`docs/architecture/CRAWL.md`](docs/architecture/CRAWL.md) — Crawler, page flow, browser pool
 - [`docs/architecture/DATA.md`](docs/architecture/DATA.md) — Parsing, page records, storage layout
 - [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, CF-Hero / origin
+- [`docs/architecture/CF_HERO.md`](docs/architecture/CF_HERO.md) — Complete CF-Hero CLI + validation flow
 - [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md) — Optional collectors → analyzers → findings
 - [`docs/CHANGES_AND_IMPROVEMENTS.md`](docs/CHANGES_AND_IMPROVEMENTS.md) — Recent changes + improvement ideas
 - [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — One-page visual architecture
@@ -235,7 +269,7 @@ python -m unittest discover -s tests -p "test_*.py"
 - Respect target terms of service and legal boundaries.
 - Use `--no-robots` only when you are explicitly authorized.
 - Avoid scraping sensitive targets without permission.
-- Store credentials and proxy secrets securely — copy `auth_creds.example.json` to `auth_creds.json` (gitignored).
+- Store credentials and proxy secrets securely — copy `examples/auth_creds.example.json` to `auth_creds.json` (gitignored).
 - Prefer env vars (`WEBVAC_USER` / `WEBVAC_PASS`) over committing credentials.
 - Optional session encryption: set `WEBVAC_SESSION_KEY` before saving sessions.
 

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from auth.session_store import (
+from webvac.auth.session_store import (
     normalize_to_storage_state,
     save_session,
     load_session,
@@ -16,11 +16,11 @@ from auth.session_store import (
     set_meta,
     cookies_from_state,
 )
-from auth.wall import is_auth_wall, is_logout_url, apply_wall_policy
-from auth.profile import profile_from_dict, load_auth_profile
-from auth.cookie_audit import audit_cookies
-from auth.credentials import resolve_credentials, redact_cmd_args
-from utils.browser import BrowserManager
+from webvac.auth.wall import is_auth_wall, is_logout_url, apply_wall_policy
+from webvac.auth.profile import profile_from_dict, load_auth_profile
+from webvac.auth.cookie_audit import audit_cookies
+from webvac.auth.credentials import resolve_credentials, redact_cmd_args
+from webvac.utils.browser import BrowserManager
 
 
 class TestSessionStore(unittest.TestCase):
@@ -93,15 +93,21 @@ class TestProfile(unittest.TestCase):
         p = profile_from_dict({
             "username": "u",
             "password": "p",
-            "auth_engine": "nodriver",
             "steps": [{"fill": "#e", "value": "$username"}],
             "dismiss_selectors": ["#ok"],
             "on_auth_wall": "abort",
             "totp_secret": "JBSWY3DPEHPK3PXP",
         })
-        self.assertEqual(p.auth_engine, "nodriver")
         self.assertEqual(len(p.steps), 1)
         self.assertEqual(p.on_auth_wall, "abort")
+
+    def test_nodriver_rejected(self):
+        with self.assertRaises(ValueError):
+            profile_from_dict({
+                "username": "u",
+                "password": "p",
+                "auth_engine": "nodriver",
+            })
 
     def test_load_file(self):
         with tempfile.TemporaryDirectory() as td:

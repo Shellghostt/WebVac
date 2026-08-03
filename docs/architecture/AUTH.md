@@ -1,16 +1,15 @@
 # Authentication Architecture
 
 **Parent:** [Full System Architecture](../ARCHITECTURE.md)  
-**Code root:** `auth/` · wiring in `core/scraper.py`, `core/crawler.py`, `core/page_scrape_flow.py`, `utils/browser.py`
+**Code root:** `webvac/auth/` · wiring in `webvac/cli/scraper.py`, `webvac/core/crawler.py`, `webvac/core/page_scrape_flow.py`, `webvac/utils/browser.py`
 
 ---
 
 ## 1. Goals
 
-- Log in once (Patchright or Nodriver), persist session, reuse across crawl slots.
+- Log in once with Patchright, persist session, reuse across crawl slots.
 - Survive mid-crawl session loss (auth walls) with a safe default policy (`skip`).
 - Support MFA/TOTP, multi-step forms, OAuth manual bootstrap, and optional encrypted sessions.
-- Keep crawl on Patchright even when Nodriver is used for auth-only.
 
 ---
 
@@ -19,7 +18,7 @@
 ```mermaid
 flowchart TB
   subgraph entry [Entry]
-    Scraper[core/scraper.py]
+    Scraper[webvac/cli/scraper.py]
     RunPy[run.py]
   end
 
@@ -30,7 +29,6 @@ flowchart TB
 
   subgraph engines [Engines]
     PR[AuthHandler Patchright]
-    ND[NodriverAuthHandler]
   end
 
   subgraph support [Support]
@@ -56,7 +54,6 @@ flowchart TB
   Scraper --> Mgr
   Mgr --> Profile
   Mgr --> PR
-  Mgr --> ND
   Mgr --> Steps
   Mgr --> MFA
   Mgr --> Pop
@@ -114,7 +111,6 @@ stateDiagram-v2
 | `session_store.py` | `storage_state` I/O, TTL meta, optional Fernet |
 | `credentials.py` | `WEBVAC_USER` / `WEBVAC_PASS`, redact helpers |
 | `auth.py` | Patchright classic login (auto + manual selectors) |
-| `nodriver_auth.py` | Nodriver auth-only login → cookies for Patchright |
 | `steps.py` | Declarative multi-step runner |
 | `mfa.py` | TOTP generation + interactive OTP/CAPTCHA pause |
 | `wall.py` | Heuristics for login pages + logout URL deny |
@@ -129,12 +125,12 @@ stateDiagram-v2
 ```mermaid
 sequenceDiagram
   participant AM as AuthManager
-  participant Eng as Patchright/Nodriver
+  participant Eng as Patchright
   participant BM as BrowserManager
   participant SS as session_store
   participant Disk as sessions/*.json
 
-  AM->>Eng: perform login on slot 0
+  AM->>Eng: login on Patchright slot 0
   Eng-->>AM: success
   AM->>BM: capture_auth_session(slot=0)
   AM->>BM: broadcast_auth_session all slots
@@ -199,17 +195,18 @@ flowchart LR
 ```
 
 - Passwords redacted in `run.py` printed commands.
-- Real `auth_creds.json` is gitignored; ship `auth_creds.example.json` only.
+- Real `auth_creds.json` is gitignored; ship `examples/auth_creds.example.json` only.
+- Profiles with `auth_engine: "nodriver"` are rejected (Nodriver was removed).
 
 ---
 
-## 8. Engine choice
+## 8. Login modes
 
-| Mode | Login engine | Crawl engine |
-|------|--------------|--------------|
-| Default | Patchright (`AuthHandler`) | Patchright |
-| `--auth-engine nodriver` | Nodriver | Patchright (after cookie handoff) |
+| Mode | Login | Crawl |
+|------|-------|-------|
+| Default `--login` | Patchright (`AuthHandler`) | Patchright |
 | `--auth-bootstrap` | Visible Patchright manual SSO | Patchright |
+| `--session-file` only | Restore cookies (skip login) | Patchright |
 
 Login always on **slot 0**. `--login` forces `--engine dynamic` (no lightweight).
 
@@ -221,7 +218,6 @@ Login always on **slot 0**. `--login` forces `--engine dynamic` (no lightweight)
 --login
 --login-url
 --username / --password
---auth-engine patchright|nodriver
 --session-file
 --auth-profile
 --auth-check-url
@@ -234,15 +230,3 @@ Login always on **slot 0**. `--login` forces `--engine dynamic` (no lightweight)
 ```
 
 Env: `WEBVAC_USER`, `WEBVAC_PASS`, `WEBVAC_SESSION_KEY`
-
----
-
-## 10. Integration checklist
-
-| Touchpoint | Behavior |
-|------------|----------|
-| `scraper.run` | Build profile → AuthManager → restore/login/bootstrap |
-| `BrowserManager` | Capture / set / broadcast auth session |
-| `Crawler` | Logout deny; pin proxy; re-verify after forced rotate |
-| `page_scrape_flow` | Auth-wall policy after goto |
-| `analyzers/auth` | Cookie flags only if `vapt_enabled` |

@@ -50,6 +50,14 @@ proxies.txt
 
 # Unnecessary files
 scrapy-master/
+extractors/
+
+# Build / packaging
+*.egg-info/
+webvac.egg-info/
+.eggs/
+dist/
+build/
 
 # OS generated files
 .DS_Store

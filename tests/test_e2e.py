@@ -5,10 +5,10 @@ import shutil
 import tempfile
 import unittest
 
-from data.page_record import PageRecordBuilder
-from data.storage import Storage
-from models.scan import ScanMetadata, TargetMetadata
-from store.scan_session import ScanSession
+from webvac.data.page_record import PageRecordBuilder
+from webvac.data.storage import Storage
+from webvac.models.scan import ScanMetadata, TargetMetadata
+from webvac.store.scan_session import ScanSession
 
 TARGET = "http://testphp.vulnweb.com/"
 FIXTURE_HTML = """<!DOCTYPE html>

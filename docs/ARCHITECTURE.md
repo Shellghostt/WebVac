@@ -1,7 +1,7 @@
 # WebVac — Full System Architecture
 
 **Last updated:** 2026-07-27  
-**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [VAPT Pipeline](architecture/VAPT.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
+**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [CF-Hero](architecture/CF_HERO.md) · [VAPT Pipeline](architecture/VAPT.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
 
 ---
 
@@ -18,7 +18,7 @@ A full **VAPT/recon stack** (collectors → analyzers → findings → active pr
 ```mermaid
 flowchart LR
   User["Operator"] --> Run["run.py menu"]
-  User --> CLI["python -m core.scraper"]
+  User --> CLI["python -m webvac"]
   Run --> CLI
   CLI --> WebVac["WebVac Runtime"]
   WebVac --> Target["Target Website"]
@@ -36,7 +36,7 @@ flowchart LR
 flowchart TB
   subgraph entry [Entry Layer]
     RunPy[run.py]
-    Scraper[core/scraper.py]
+    Scraper[webvac/cli/scraper.py]
   end
 
   subgraph authLayer [Auth Layer]
@@ -256,7 +256,7 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 | Concurrent browser slots | Active |
 | Proxy pool + health + sticky | Active |
 | Robots + delays | Active |
-| AuthManager (Patchright / Nodriver) | Active |
+| AuthManager (Patchright) | Active |
 | Session restore / TTL / Fernet | Active |
 | Mid-crawl auth-wall policy | Active |
 | CF-Hero / origin Host bypass | Active |

@@ -1,0 +1,18 @@
+# Example proxy list for WebVac (`--proxy-file`)
+#
+# One proxy per line. Supported forms:
+#   http://HOST:PORT
+#   http://HOST:PORT|username|password
+#   socks5://HOST:PORT|username|password
+#
+# Lines starting with # are ignored.
+# Copy this file to proxies.txt (gitignored) and edit with real proxies.
+
+# Plain HTTP proxy
+http://1.2.3.4:8080
+
+# Authenticated HTTP proxy
+http://5.6.7.8:3128|myuser|mypassword
+
+# SOCKS5 example
+# socks5://127.0.0.1:1080|user|pass
