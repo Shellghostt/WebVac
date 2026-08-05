@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
     "user_agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/133.0.0.0 Safari/537.36"
     ),
 
     # Crawl limits
@@ -75,6 +75,14 @@ DEFAULT_CONFIG = {
     # Rotate a random realistic viewport size on each new context
     "rotate_viewport": True,
 
+    # Human-like pointer / scroll / settle (Patchright Chromium)
+    "humanize": True,
+    "humanize_warmup": True,       # visit site root once per host before scraping
+    "humanize_after_goto": True,   # micro-moves after each successful load
+    "humanize_idle_min": 0.35,
+    "humanize_idle_max": 1.6,
+    "humanize_type_delay_max_ms": 160,
+
     # Crawler rendering & scroll settings
     "spa_delay": 1500,           # ms to wait for SPA load / JS settling
     "scroll_viewport": 1080,     # height step size for dynamic scrolling
@@ -134,17 +142,12 @@ DEFAULT_CONFIG = {
         "concurrency": 5,
     },
 
-    # Origin bypass (CF-Hero / manual IP)
+    # Origin bypass (manual IP)
     "origin_access": None,  # OriginTarget dict at runtime
-    "cf_hero_auto_fallback": True,
-    "cf_hero_bin": None,
-    "cf_hero_args": "",
-    "cf_hero_timeout": 300,
-    "cf_hero_workers": 0,
-    "cf_hero_quiet": False,
-    "cf_hero_log": None,
     "skip_origin_validate": False,
     "origin_title": "",
+    "network_debug": True,
+    "network_debug_always": False,
 
     # Download PDF links discovered during crawl
     "download_pdfs": True,

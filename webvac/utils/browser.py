@@ -17,37 +17,28 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from webvac.config.config import DEFAULT_CONFIG
 from webvac.utils.detection import is_bot_detected
 from webvac.utils.browser_pool import BrowserSlot, SlotIdentity
+from webvac.utils import humanize as humanize_mod
+from webvac.utils.humanize import HumanizeConfig, config_from_mapping
 
 
 # ── User-Agent pool ───────────────────────────────────────────────────────────
-# Realistic, recent Chrome on Windows 10/11 + macOS user-agents.
-# Rotate per context so each session looks like a different device.
+# Keep Chromium major versions recent and aligned with Sec-CH-UA (Patchright Chromium).
 _USER_AGENTS: list[str] = [
-    # Chrome 124 — Windows 10
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    # Chrome 123 — Windows 11
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.6312.122 Safari/537.36",
-    # Chrome 122 — Windows 10
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.129 Safari/537.36",
-    # Chrome 121 — Windows 10
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.185 Safari/537.36",
-    # Chrome 124 — macOS Sonoma
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    # Chrome 123 — macOS Ventura
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    # Chrome 124 — Windows 11 (21H2)
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Safari/537.36",
-    # Edge 124 — Windows 10 (Edge sends same Chromium UA)
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-    # Chrome 120 — Windows 10
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.234 Safari/537.36",
-    # Chrome 119 — macOS
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.6045.199 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 ]
 
 # ── US city geolocation pool ──────────────────────────────────────────────────
@@ -101,6 +92,28 @@ _STEALTH_INIT_SCRIPT = r"""
 
     // 3. Realistic platform
     Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+    // 3b. window.chrome — missing object is a common headless giveaway
+    if (!window.chrome) {
+        window.chrome = {
+            runtime: {},
+            loadTimes: function() {},
+            csi: function() {},
+            app: { isInstalled: false },
+        };
+    }
+
+    // 3c. permissions.query — Notification prompt behaviour like real Chrome
+    const _origPermissionsQuery = window.navigator.permissions && window.navigator.permissions.query
+        ? window.navigator.permissions.query.bind(window.navigator.permissions)
+        : null;
+    if (_origPermissionsQuery) {
+        window.navigator.permissions.query = (parameters) => (
+            parameters && parameters.name === 'notifications'
+                ? Promise.resolve({ state: Notification.permission })
+                : _origPermissionsQuery(parameters)
+        );
+    }
 
     // 4. Realistic hardware fingerprint — prevent fingerprinting via concurrency / memory
     Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
@@ -335,6 +348,7 @@ class BrowserManager:
         rotate_user_agent: bool = True,
         rotate_geolocation: bool = True,
         rotate_viewport: bool = True,
+        humanize: bool = True,
     ) -> None:
         self.headless = headless
         # If a fixed user_agent is provided, use it; otherwise rotate
@@ -345,13 +359,18 @@ class BrowserManager:
         self.rotate_user_agent = rotate_user_agent
         self.rotate_geolocation = rotate_geolocation
         self.rotate_viewport = rotate_viewport
+        self.humanize_enabled = bool(humanize)
+        self._humanize_cfg = HumanizeConfig(enabled=self.humanize_enabled)
+        self._humanize_warmup = True
+        self._humanize_after_goto = True
+        self._warmed_hosts: set[str] = set()
         self._host_resolver_rules: Optional[str] = None
         self._pool_size: int = 1
         self._slots: list[BrowserSlot] = []
         self._slot_proxy_configs: list[SlotIdentity] = []
         self._session_platform: str = "Windows"
         self._session_sec_ch_ua: str = (
-            '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+            '"Chromium";v="133", "Google Chrome";v="133", "Not-A.Brand";v="99"'
         )
 
         # Active engine state
@@ -759,27 +778,23 @@ class BrowserManager:
         await self._shutdown_current()
         print("[Browser] Chromium closed.")
 
+    def configure_humanize(self, session_config: Optional[dict] = None) -> None:
+        """Apply humanize settings from session/DEFAULT_CONFIG."""
+        cfg_map = dict(DEFAULT_CONFIG)
+        if session_config:
+            cfg_map.update(session_config)
+        self.humanize_enabled = bool(cfg_map.get("humanize", True))
+        self._humanize_warmup = bool(cfg_map.get("humanize_warmup", True))
+        self._humanize_after_goto = bool(cfg_map.get("humanize_after_goto", True))
+        self._humanize_cfg = config_from_mapping(cfg_map)
+        self._humanize_cfg.enabled = self.humanize_enabled
+
     async def human_warmup(self, target_url: str) -> None:
         """
         Warm up the browser session by visiting the site's root domain first,
         simulating realistic human arrival behaviour before the actual target
         page is loaded.
-
-        What this does:
-          1. Opens a new page.
-          2. Navigates to the target's root domain (e.g. https://example.com).
-          3. Waits a realistic human read-time (3–8 seconds).
-          4. Performs random mouse movements across the viewport.
-          5. Scrolls down slowly then back up (as a human would skim the page).
-          6. Closes the warmup page.
-        After this the browser context has site cookies and a navigation history,
-        making subsequent requests look like continued browsing rather than a
-        direct cold-start bot hit.
-
-        Args:
-            target_url: The URL about to be scraped (used to extract root domain).
         """
-        from urllib.parse import urlparse
         parsed = urlparse(target_url)
         root = f"{parsed.scheme}://{parsed.netloc}"
         print(f"[Browser] [Warmup] Visiting root domain {root} to build session...")
@@ -787,37 +802,44 @@ class BrowserManager:
         page = await self.new_page()
         try:
             await page.goto(root, wait_until="domcontentloaded", timeout=20000)
-
-            # Realistic dwell time: 3–8 seconds
-            await asyncio.sleep(random.uniform(3.0, 8.0))
-
-            # Random mouse movements across the viewport
-            vp = self._session_viewport
-            for _ in range(random.randint(4, 9)):
-                x = random.randint(80, vp["width"]  - 80)
-                y = random.randint(80, vp["height"] - 80)
-                await page.mouse.move(x, y)
-                await asyncio.sleep(random.uniform(0.1, 0.5))
-
-            # Slow scroll down 2–4 viewport heights
-            scroll_steps = random.randint(2, 4)
-            for i in range(scroll_steps):
-                await page.evaluate(f"window.scrollBy(0, {random.randint(200, 500)})")
-                await asyncio.sleep(random.uniform(0.4, 1.2))
-
-            # Pause as if reading, then scroll back up
-            await asyncio.sleep(random.uniform(1.0, 3.0))
-            await page.evaluate("window.scrollTo(0, 0)")
-            await asyncio.sleep(random.uniform(0.5, 1.5))
-
+            cfg = self._humanize_cfg
+            if cfg.enabled:
+                await humanize_mod.idle(page, cfg=cfg)
+                await humanize_mod.settle(page, cfg=cfg)
+                await humanize_mod.skim_page(page, cfg=cfg)
+            else:
+                await asyncio.sleep(random.uniform(1.5, 3.0))
             print(f"[Browser] [Warmup] Done — session warmed on {parsed.netloc}")
         except Exception as exc:
             print(f"[Browser] [Warmup] Non-fatal warmup error: {exc}")
         finally:
             try:
+                humanize_mod.clear_cursor(page)
                 await page.close()
             except Exception:
                 pass
+
+    async def ensure_host_warmup(self, target_url: str) -> None:
+        """Warm each host once per browser session (configurable)."""
+        if not self.humanize_enabled or not self._humanize_warmup:
+            return
+        try:
+            host = (urlparse(target_url).netloc or "").lower()
+        except Exception:
+            return
+        if not host or host in self._warmed_hosts:
+            return
+        await self.human_warmup(target_url)
+        self._warmed_hosts.add(host)
+
+    async def settle_page(self, page) -> None:
+        """Light human activity after a successful navigation."""
+        if not self.humanize_enabled or not self._humanize_after_goto:
+            return
+        try:
+            await humanize_mod.settle(page, cfg=self._humanize_cfg)
+        except Exception:
+            pass
 
     # ── Identity helpers ──────────────────────────────────────────────────────
 
@@ -853,12 +875,27 @@ class BrowserManager:
         pinned_sec_ch_ua: Optional[str] = None,
     ) -> None:
         self._session_ua = pinned_ua or self._pick_user_agent()
-        self._session_platform = pinned_platform or "Windows"
-        self._session_sec_ch_ua = pinned_sec_ch_ua or (
-            '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
-        )
+        if "mac" in self._session_ua.lower() or "macintosh" in self._session_ua.lower():
+            self._session_platform = pinned_platform or "macOS"
+        else:
+            self._session_platform = pinned_platform or "Windows"
+        self._session_sec_ch_ua = pinned_sec_ch_ua or self._sec_ch_ua_for_ua(self._session_ua)
         self._session_location = self._pick_location()
         self._session_viewport = self._pick_viewport()
+
+    @staticmethod
+    def _sec_ch_ua_for_ua(ua: str) -> str:
+        m = re.search(r"Chrome/(\d+)", ua)
+        v = m.group(1) if m else "133"
+        if "Edg/" in ua:
+            return (
+                f'"Chromium";v="{v}", "Microsoft Edge";v="{v}", '
+                f'"Not-A.Brand";v="99"'
+            )
+        return (
+            f'"Chromium";v="{v}", "Google Chrome";v="{v}", '
+            f'"Not-A.Brand";v="99"'
+        )
 
     def _rotate_identity(self, pinned_ua: Optional[str] = None) -> None:
         self._apply_identity(pinned_ua=pinned_ua)
@@ -917,7 +954,7 @@ class BrowserManager:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _launch(self, engine: str) -> None:
-        """Launch browser and initialize the context pool."""
+        """Launch Patchright Chromium with hardened headless args."""
         from patchright.async_api import async_playwright
 
         self.engine = engine
@@ -929,26 +966,47 @@ class BrowserManager:
             "--disable-dev-shm-usage",
             "--no-first-run",
             "--no-default-browser-check",
-            "--disable-extensions",
             "--disable-background-networking",
             "--disable-default-apps",
+            "--disable-sync",
+            "--disable-translate",
+            "--metrics-recording-only",
+            "--mute-audio",
+            "--no-zygote",
             f"--window-size={self._session_viewport['width']},{self._session_viewport['height']}",
+            # Prefer language consistency with context locale
+            "--lang=en-US",
         ]
+        # Headless Chromium: avoid obvious automation defaults where Patchright allows.
+        if self.headless:
+            launch_args.extend([
+                "--hide-scrollbars",
+                "--disable-hang-monitor",
+                "--disable-prompt-on-repost",
+            ])
         if self._host_resolver_rules:
             launch_args.append(f"--host-resolver-rules={self._host_resolver_rules}")
             launch_args.append("--ignore-certificate-errors")
 
         self._playwright_handle = await async_playwright().start()
-        self._browser = await self._playwright_handle.chromium.launch(
-            headless=self.headless,
-            args=launch_args,
-        )
+        launch_kwargs: dict = {
+            "headless": self.headless,
+            "args": launch_args,
+            # Strip Chromium's enable-automation switch when present
+            "ignore_default_args": ["--enable-automation"],
+        }
+        try:
+            self._browser = await self._playwright_handle.chromium.launch(**launch_kwargs)
+        except TypeError:
+            launch_kwargs.pop("ignore_default_args", None)
+            self._browser = await self._playwright_handle.chromium.launch(**launch_kwargs)
         await self._init_pool()
 
         resolver = f"  resolver={self._host_resolver_rules}" if self._host_resolver_rules else ""
+        mode = "headless" if self.headless else "headed"
         print(
-            f"[Browser] Chromium launched  engine={engine}  "
-            f"pool={self._pool_size}{resolver}"
+            f"[Browser] Patchright Chromium launched  mode={mode}  "
+            f"pool={self._pool_size}  humanize={self.humanize_enabled}{resolver}"
         )
 
     async def _shutdown_current(self) -> None:
@@ -1000,6 +1058,9 @@ class BrowserManager:
             timezone_id=timezone,
             color_scheme="light",
             device_scale_factor=1,
+            is_mobile=False,
+            has_touch=False,
+            java_script_enabled=True,
             geolocation={"latitude": lat, "longitude": lon, "accuracy": 10},
             permissions=["geolocation"],
             extra_http_headers={
