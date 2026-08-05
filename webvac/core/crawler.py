@@ -32,8 +32,6 @@ from webvac.utils.proxy import ProxyManager, ProxyEntry
 from webvac.utils.screenshot import ScreenshotModule
 from webvac.utils.detection import wait_for_challenge_resolution
 from webvac.utils.browser_pool import SlotIdentity
-from webvac.utils.cf_hero import discover_origin, find_cf_hero_bin
-
 from webvac.core.pipeline import PipelineManager
 from webvac.core.page_scrape_flow import run_page_scrape
 from webvac.collectors.engine import CollectorEngine
@@ -129,7 +127,6 @@ class Crawler:
         )
         self._origin: Optional[OriginTarget] = None
         self._http_session: Optional[aiohttp.ClientSession] = None
-        self._cf_hero_hosts_attempted: set[str] = set()
         self._consent_paused_hosts: set[str] = set()
         raw_origin = self.session_config.get("origin_access")
         if raw_origin:
@@ -175,78 +172,6 @@ class Crawler:
             await self._http_session.close()
         self._http_session = None
 
-    async def _try_cf_hero_fallback(self, url: str) -> bool:
-        """On bot block, discover origin via CF-Hero and reconfigure the browser."""
-        if self._origin:
-            return False
-        if not self.session_config.get("cf_hero_auto_fallback", True):
-            return False
-
-        hostname = urlparse(url).netloc.split("@")[-1].split(":")[0].lower()
-        if not hostname or hostname in self._cf_hero_hosts_attempted:
-            return False
-        if not find_cf_hero_bin(self.session_config.get("cf_hero_bin")):
-            tqdm.write(
-                "[CF-Hero] Auto-fallback skipped — cf-hero binary not found on PATH."
-            )
-            return False
-
-        self._cf_hero_hosts_attempted.add(hostname)
-        seed = self._seed_url or url
-        proxy_url = None
-        slot0 = self._proxy_for_slot(0)
-        if slot0:
-            proxy_url = slot0.server
-
-        extra_raw = self.session_config.get("cf_hero_args") or ""
-        extra = [a for a in extra_raw.split() if a] if extra_raw else None
-        log_path = self.session_config.get("cf_hero_log")
-        if not log_path and self.output_dir:
-            log_path = os.path.join(
-                self.output_dir, "_cf_hero", f"{hostname}_auto.log",
-            )
-
-        tqdm.write(f"[CF-Hero] Auto-fallback: discovering origin for {hostname}...")
-        try:
-            origin = await discover_origin(
-                seed,
-                hostname,
-                bin_path=self.session_config.get("cf_hero_bin"),
-                extra_args=extra,
-                expected_title=self.session_config.get("origin_title") or "",
-                proxy=proxy_url,
-                validate=not self.session_config.get("skip_origin_validate", False),
-                verbose=not self.session_config.get("cf_hero_quiet", False),
-                workers=self.session_config.get("cf_hero_workers") or None,
-                timeout_sec=float(self.session_config.get("cf_hero_timeout") or 300),
-                log_path=log_path,
-            )
-        except Exception as exc:
-            tqdm.write(f"[CF-Hero] Auto-fallback failed: {exc}")
-            return False
-
-        if not origin:
-            return False
-
-        if self.session_config.get("skip_origin_validate") and not origin.validated:
-            origin.validated = True
-
-        self._origin = origin
-        self.session_config["origin_access"] = origin.to_dict()
-        if self.scope_manager:
-            self.scope_manager.scope.origin_access = origin
-
-        await self.browser.reconfigure_host_resolver(
-            origin.host_resolver_rule(),
-            slot_identities=self._build_slot_identities(),
-        )
-        tqdm.write(
-            f"[CF-Hero] Origin bypass active: {origin.origin_ip} "
-            f"(Host: {origin.hostname}, validated={origin.validated})"
-        )
-        return True
-
-
     @property
     def _current_proxy(self) -> Optional[ProxyEntry]:
         return self._proxy_for_slot(0)
@@ -281,11 +206,15 @@ class Crawler:
 
         with tqdm(total=1, desc="Scraping", unit="page",
                   dynamic_ncols=True, colour="cyan") as pbar:
+            tqdm.write(f"[Crawler] Starting single-page scrape → {url}")
             data = await self._scrape_page(url, depth=0)
             pbar.update(1)
 
         if not data:
             data = self._create_failed_page(url, "Failed to scrape page (WAF block or exception)")
+            tqdm.write("[Crawler] ✗ Single-page scrape failed.")
+        elif data.get("status") == "auth_wall":
+            tqdm.write(f"[Crawler] ⊘ Auth wall skipped — {url}")
         elif self.pipeline_manager:
             data = self.pipeline_manager.process_item(data)
             
@@ -295,7 +224,14 @@ class Crawler:
         self._partial_results = [data]
         await self._close_http_session()
         await self.finalize_session()
-        print("[Crawler] Done. Extracted data from 1 page.")
+        if data.get("status") == "auth_wall":
+            print("[Crawler] Done. Target was an auth/login wall (skipped, not failed).")
+        else:
+            title = (data.get("title") or "").replace("\n", " ").strip()[:60]
+            print(
+                f"[Crawler] Done. Extracted data from 1 page"
+                f"{f' — {title}' if title else ''}."
+            )
         return [data]
 
     async def scrape_site(self, start_url: str) -> list[dict]:
@@ -396,6 +332,13 @@ class Crawler:
                 )
                 pbar.set_description(label)
 
+                for i, (u, d) in enumerate(batch):
+                    tqdm.write(
+                        f"[Crawler] → [{len(results) + i + 1}"
+                        f"{'' if unlimited else '/' + str(self.max_pages)}] "
+                        f"depth={d}  {u}"
+                    )
+
                 batch_start = time.monotonic()
                 page_data_list = await asyncio.gather(
                     *[
@@ -410,22 +353,34 @@ class Crawler:
 
                 for (url, depth), data in zip(batch, page_data_list):
                     if isinstance(data, Exception):
-                        tqdm.write(f"[Crawler] Exception on {url}: {data}")
+                        tqdm.write(f"[Crawler] ✗ Exception on {url}: {data}")
                         failed_data = self._create_failed_page(url, f"Exception: {data}")
                         results.append(failed_data)
                         self._partial_results = list(results)
                         pbar.update(1)
+                        pbar.set_postfix_str(_fmt_eta(len(queue)))
                         continue
                     if not data:
+                        tqdm.write(f"[Crawler] ✗ Skipped/failed  {url}")
                         failed_data = self._create_failed_page(url, "Scrape failed (WAF block or timeout)")
                         results.append(failed_data)
                         self._partial_results = list(results)
                         pbar.update(1)
+                        pbar.set_postfix_str(_fmt_eta(len(queue)))
+                        continue
+
+                    if data.get("status") == "auth_wall":
+                        tqdm.write(f"[Crawler] ⊘ Auth wall skipped  {url}")
+                        results.append(data)
+                        self._partial_results = list(results)
+                        pbar.update(1)
+                        pbar.set_postfix_str(_fmt_eta(len(queue)))
                         continue
 
                     if self.pipeline_manager:
                         data = self.pipeline_manager.process_item(data)
                         if not data:
+                            tqdm.write(f"[Crawler] ⊗ Filtered by pipeline  {url}")
                             pbar.update(1)
                             pbar.set_postfix_str(_fmt_eta(len(queue)))
                             continue
@@ -433,31 +388,60 @@ class Crawler:
                     results.append(data)
                     self._partial_results = list(results)
                     pbar.update(1)
-                    pbar.set_postfix_str(_fmt_eta(len(queue)))
+
+                    title = (data.get("title") or "").replace("\n", " ").strip()
+                    if len(title) > 50:
+                        title = title[:47] + "..."
+                    n_links = len(data.get("links") or [])
+                    page_status = data.get("status") or "ok"
+                    tqdm.write(
+                        f"[Crawler] ✓ [{len(results)}"
+                        f"{'' if unlimited else '/' + str(self.max_pages)}] "
+                        f"{page_status}  links={n_links}  "
+                        f"{title or '(no title)'}  |  {url}"
+                    )
 
                     if depth < self.max_depth:
                         added = 0
+                        skipped_auth = 0
+                        from webvac.auth.wall import is_auth_wall
                         for link in data.get("links", []):
                             href = link.get("url", "")
-                            if (
-                                link.get("type") == "internal"
-                                and href
-                                and href not in visited
-                                and href not in queued
-                                and self._url_ok_for_crawl(href, origin)
-                            ):
-                                queued.add(href)
-                                queue.append((href, depth + 1))
-                                added += 1
-                                if self.endpoint_graph:
-                                    self.endpoint_graph.add_edge(
-                                        url, href, source="link", child_depth=depth + 1
-                                    )
-                                await self._prefetch_robots(href)
+                            if link.get("type") != "internal" or not href:
+                                continue
+                            if href in visited or href in queued:
+                                continue
+                            if is_auth_wall(url=href):
+                                skipped_auth += 1
+                                visited.add(href)
+                                continue
+                            if not self._url_ok_for_crawl(href, origin):
+                                continue
+                            queued.add(href)
+                            queue.append((href, depth + 1))
+                            added += 1
+                            if self.endpoint_graph:
+                                self.endpoint_graph.add_edge(
+                                    url, href, source="link", child_depth=depth + 1
+                                )
+                            await self._prefetch_robots(href)
+                        postfix = _fmt_eta(len(queue))
                         if added:
-                            pbar.set_postfix_str(
-                                f"{_fmt_eta(len(queue))} | +{added} urls"
+                            postfix = f"{postfix} | +{added} urls"
+                            msg = (
+                                f"[Crawler]   queued +{added} "
+                                f"(queue={len(queue)}, visited={len(visited)})"
                             )
+                            if skipped_auth:
+                                msg += f"  auth-links skipped={skipped_auth}"
+                            tqdm.write(msg)
+                        elif skipped_auth:
+                            tqdm.write(
+                                f"[Crawler]   auth-links skipped={skipped_auth} (not queued)"
+                            )
+                        pbar.set_postfix_str(postfix)
+                    else:
+                        pbar.set_postfix_str(_fmt_eta(len(queue)))
 
         total_elapsed = time.monotonic() - crawl_start
         mins, secs = divmod(int(total_elapsed), 60)
@@ -503,10 +487,15 @@ class Crawler:
             self.endpoint_graph = None
 
     def _url_ok_for_crawl(self, url: str, origin: str) -> bool:
+        from webvac.auth.wall import is_auth_wall, is_logout_url
+
+        # Never enqueue login/register walls as crawl targets.
+        if is_auth_wall(url=url):
+            return False
+
         if self.session_config.get("deny_logout_urls") or (
             self.auth_manager and self.auth_manager.authenticated
         ):
-            from webvac.auth.wall import is_logout_url
             if is_logout_url(url):
                 return False
         if self.scope_manager and not self.scope_manager.scope.is_url_in_scope(url):
@@ -834,8 +823,13 @@ class Crawler:
             )
 
     async def _scroll_page(self, page: Page) -> None:
-        """Scroll the page in steps to trigger lazy-loaded content."""
+        """Scroll the page in steps to trigger lazy-loaded content (humanized wheel)."""
+        from webvac.utils import humanize as humanize_mod
+        from webvac.utils.humanize import config_from_mapping
+
         try:
+            cfg = config_from_mapping(self.session_config)
+            use_human = bool(self.session_config.get("humanize", True)) and cfg.enabled
             scroll_height = await page.evaluate("document.body.scrollHeight")
             viewport_height = self.scroll_viewport
             current = 0
@@ -844,12 +838,21 @@ class Crawler:
             while current < scroll_height and steps < self._scroll_max_steps:
                 if time.monotonic() > deadline:
                     break
-                current += viewport_height
-                await page.evaluate(f"window.scrollTo(0, {current})")
-                await asyncio.sleep(self.scroll_delay)
+                step = min(viewport_height, max(120, scroll_height - current))
+                if use_human:
+                    await humanize_mod.scroll_by(page, step, cfg=cfg)
+                else:
+                    current_target = current + step
+                    await page.evaluate(f"window.scrollTo(0, {current_target})")
+                    await asyncio.sleep(self.scroll_delay)
+                current += step
                 steps += 1
                 scroll_height = await page.evaluate("document.body.scrollHeight")
-            await page.evaluate("window.scrollTo(0, 0)")
+            if use_human:
+                # Ease back toward top with wheel (not instant jump)
+                await humanize_mod.scroll_by(page, -min(current, viewport_height * 2), cfg=cfg)
+            else:
+                await page.evaluate("window.scrollTo(0, 0)")
         except Exception:
             pass  # Non-fatal
 

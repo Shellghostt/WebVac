@@ -54,7 +54,6 @@ from webvac.store.scan_session import ScanSession
 from webvac.utils.asset_downloader import AssetDownloader, collect_pdf_urls
 from webvac.models.origin import OriginTarget
 from webvac.utils.origin_probe import validate_origin, fetch_vanity_title
-from webvac.utils.cf_hero import discover_origin, find_cf_hero_bin
 from webvac.utils.browser_pool import SlotIdentity
 from urllib.parse import urlparse
 
@@ -351,6 +350,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     p.add_argument(
+        "--no-humanize",
+        action="store_true",
+        help=(
+            "Disable human-like mouse paths, wheel scroll, per-host warmup, "
+            "and post-load settle behaviour (faster, more bot-like)."
+        ),
+    )
+
+    p.add_argument(
+        "--no-humanize-warmup",
+        action="store_true",
+        help="Skip the once-per-host root-domain warmup visit (keep other humanize).",
+    )
+
+    p.add_argument(
         "--parent-scan-id",
         default=None,
         metavar="SCAN_ID",
@@ -363,7 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Follow subdomains of the target during crawl.",
     )
 
-    # Cloudflare origin bypass (CF-Hero)
+    # Origin bypass (manual IP)
     p.add_argument(
         "--origin-ip",
         default=None,
@@ -371,62 +385,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scrape via origin IP with Host header (bypass CDN edge).",
     )
     p.add_argument(
-        "--cf-hero",
-        action="store_true",
-        help="Run CF-Hero to discover origin IP before scraping (requires cf-hero on PATH).",
-    )
-    p.add_argument(
-        "--cf-hero-bin",
-        default=None,
-        metavar="PATH",
-        help="Path to cf-hero binary (default: search PATH / ~/go/bin).",
-    )
-    p.add_argument(
-        "--cf-hero-args",
-        default="",
-        metavar="ARGS",
-        help='Extra cf-hero flags, e.g. "-shodan -censys -securitytrails -zoomeye".',
-    )
-    p.add_argument(
-        "--cf-hero-timeout",
-        type=int,
-        default=300,
-        metavar="SECS",
-        help="CF-Hero process timeout in seconds (default: 300).",
-    )
-    p.add_argument(
-        "--cf-hero-workers",
-        type=int,
-        default=0,
-        metavar="N",
-        help="CF-Hero worker count (-w). 0 = tool default.",
-    )
-    p.add_argument(
-        "--cf-hero-quiet",
-        action="store_true",
-        help="Do not pass -v to CF-Hero.",
-    )
-    p.add_argument(
         "--origin-title",
         default=None,
         metavar="TITLE",
-        help="Expected HTML title for origin validation (also passed to CF-Hero -title).",
+        help="Expected HTML title for origin validation.",
     )
     p.add_argument(
         "--skip-origin-validate",
         action="store_true",
-        help="Use first CF-Hero/manual IP without title validation (use responsibly).",
+        help="Use manual origin IP without title validation (use responsibly).",
     )
     p.add_argument(
-        "--no-cf-hero-auto",
+        "--no-network-debug",
         action="store_true",
-        help="Disable automatic CF-Hero origin discovery when bot/WAF blocks are detected.",
+        help="Disable per-page network listeners and failure dumps under _network_debug/.",
     )
     p.add_argument(
-        "--cf-hero-log",
-        default=None,
-        metavar="FILE",
-        help="Write raw CF-Hero stdout/stderr to this file.",
+        "--network-debug-always",
+        action="store_true",
+        help="Also dump network debug JSON on successful page scrapes (noisy).",
     )
 
     return p
@@ -458,72 +435,39 @@ def _assign_slot_proxies(proxy_manager, concurrency: int, first_entry=None) -> l
 
 
 async def _resolve_origin_access(args, seed_url: str, proxy_url: str | None):
-    """Resolve OriginTarget from --origin-ip or --cf-hero."""
+    """Resolve OriginTarget from --origin-ip."""
     hostname = urlparse(seed_url).netloc.split("@")[-1].split(":")[0].lower()
     if not hostname:
         print(f"{Fore.RED}[Origin] Invalid URL — no hostname{Style.RESET_ALL}")
         return None
 
-    if args.origin_ip:
-        parsed = urlparse(seed_url)
-        scheme = parsed.scheme or "https"
-        port = parsed.port or (443 if scheme == "https" else 80)
-        origin = OriginTarget(
-            hostname=hostname,
-            origin_ip=args.origin_ip.strip(),
-            scheme=scheme,
-            port=port,
-            source="manual",
-        )
-        if args.skip_origin_validate:
-            origin.validated = True
-            print(f"{Fore.CYAN}[Origin] Using manual IP {origin.origin_ip} (validation skipped){Style.RESET_ALL}")
-            return origin
-
-        title = args.origin_title or await fetch_vanity_title(seed_url, proxy=proxy_url)
-        origin.expected_title = title or ""
-        if await validate_origin(
-            origin, seed_url, expected_title=title, proxy=proxy_url,
-        ):
-            origin.validated = True
-            print(f"{Fore.GREEN}[Origin] Validated manual IP {origin.origin_ip}{Style.RESET_ALL}")
-            return origin
-        print(f"{Fore.YELLOW}[Origin] Manual IP {origin.origin_ip} failed title validation{Style.RESET_ALL}")
+    if not args.origin_ip:
         return None
 
-    if args.cf_hero:
-        if not find_cf_hero_bin(args.cf_hero_bin):
-            print(
-                f"{Fore.RED}[CF-Hero] cf-hero not found. Install: "
-                f"go install -v github.com/musana/cf-hero/cmd/cf-hero@latest{Style.RESET_ALL}"
-            )
-            return None
-        extra = [a for a in args.cf_hero_args.split() if a] if args.cf_hero_args else None
-        log_path = args.cf_hero_log
-        if not log_path:
-            # Default log next to output root for auditability
-            log_path = os.path.join(args.output or "scraped_data", "_cf_hero", f"{hostname}.log")
-        origin = await discover_origin(
-            seed_url,
-            hostname,
-            bin_path=args.cf_hero_bin,
-            extra_args=extra,
-            expected_title=args.origin_title or "",
-            proxy=proxy_url,
-            validate=not args.skip_origin_validate,
-            verbose=not args.cf_hero_quiet,
-            workers=args.cf_hero_workers or None,
-            timeout_sec=float(args.cf_hero_timeout or 300),
-            log_path=log_path,
-        )
-        if origin and args.skip_origin_validate and not origin.validated:
-            origin.validated = True
-            print(
-                f"{Fore.YELLOW}[CF-Hero] Using unvalidated IP {origin.origin_ip} "
-                f"(--skip-origin-validate){Style.RESET_ALL}"
-            )
+    parsed = urlparse(seed_url)
+    scheme = parsed.scheme or "https"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    origin = OriginTarget(
+        hostname=hostname,
+        origin_ip=args.origin_ip.strip(),
+        scheme=scheme,
+        port=port,
+        source="manual",
+    )
+    if args.skip_origin_validate:
+        origin.validated = True
+        print(f"{Fore.CYAN}[Origin] Using manual IP {origin.origin_ip} (validation skipped){Style.RESET_ALL}")
         return origin
 
+    title = args.origin_title or await fetch_vanity_title(seed_url, proxy=proxy_url)
+    origin.expected_title = title or ""
+    if await validate_origin(
+        origin, seed_url, expected_title=title, proxy=proxy_url,
+    ):
+        origin.validated = True
+        print(f"{Fore.GREEN}[Origin] Validated manual IP {origin.origin_ip}{Style.RESET_ALL}")
+        return origin
+    print(f"{Fore.YELLOW}[Origin] Manual IP {origin.origin_ip} failed title validation{Style.RESET_ALL}")
     return None
 
 
@@ -674,10 +618,10 @@ async def run(args):
         initial_proxy_dict  = initial_proxy_entry.to_patchright() if initial_proxy_entry else None
 
 
-    # ── Origin resolution (before browser — uses aiohttp / cf-hero CLI) ───────
+    # ── Origin resolution (before browser — uses aiohttp) ───────
     proxy_url = initial_proxy_entry.server if initial_proxy_entry else None
     origin_target = None
-    if args.origin_ip or args.cf_hero:
+    if args.origin_ip:
         try:
             origin_target = await _resolve_origin_access(args, args.url, proxy_url)
         except Exception as exc:
@@ -697,6 +641,7 @@ async def run(args):
         rotate_user_agent=DEFAULT_CONFIG["rotate_user_agent"],
         rotate_geolocation=DEFAULT_CONFIG["rotate_geolocation"],
         rotate_viewport=DEFAULT_CONFIG["rotate_viewport"],
+        humanize=not bool(getattr(args, "no_humanize", False)),
     )
     resolver = origin_target.host_resolver_rule() if origin_target else None
     slot_entries = _assign_slot_proxies(
@@ -816,18 +761,20 @@ async def run(args):
         session_config = dict(DEFAULT_CONFIG)
         session_config["max_depth"] = args.depth
         session_config["max_pages"] = args.max_pages
-        session_config["cf_hero_auto_fallback"] = not args.no_cf_hero_auto
-        session_config["cf_hero_bin"] = args.cf_hero_bin
-        session_config["cf_hero_args"] = args.cf_hero_args
-        session_config["cf_hero_timeout"] = int(getattr(args, "cf_hero_timeout", 300) or 300)
-        session_config["cf_hero_workers"] = int(getattr(args, "cf_hero_workers", 0) or 0)
-        session_config["cf_hero_quiet"] = bool(getattr(args, "cf_hero_quiet", False))
-        session_config["cf_hero_log"] = getattr(args, "cf_hero_log", None)
         session_config["skip_origin_validate"] = bool(getattr(args, "skip_origin_validate", False))
         if args.origin_title:
             session_config["origin_title"] = args.origin_title
+        session_config["network_debug"] = not bool(getattr(args, "no_network_debug", False))
+        session_config["network_debug_always"] = bool(getattr(args, "network_debug_always", False))
         session_config["consent_dismiss"] = not bool(getattr(args, "no_consent_dismiss", False))
         session_config["pause_for_consent"] = bool(getattr(args, "pause_for_consent", False))
+        session_config["humanize"] = not bool(getattr(args, "no_humanize", False))
+        session_config["humanize_warmup"] = (
+            session_config["humanize"]
+            and not bool(getattr(args, "no_humanize_warmup", False))
+        )
+        session_config["humanize_after_goto"] = session_config["humanize"]
+        browser.configure_humanize(session_config)
         if getattr(args, "dismiss_selector", None):
             session_config["dismiss_selectors"] = list(args.dismiss_selector)
         if session_config["pause_for_consent"] and not getattr(args, "no_headless", False):
