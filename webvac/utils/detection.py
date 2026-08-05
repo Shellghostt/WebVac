@@ -94,11 +94,15 @@ async def is_bot_detected(page, response=None) -> bool:
     """
     Return True if the current page looks like a CAPTCHA / bot-block page.
 
+    Login/auth walls are excluded — even when they embed CAPTCHA widgets —
+    so callers can apply auth-wall policy instead of bot retries/proxy rotation.
+
     Checks (in order of cost):
       1. HTTP response status code   (cheapest — from response object)
-      2. Current URL                 (cheap — already in memory)
-      3. Page <title>                (cheap — JS evaluate)
-      4. Raw HTML body               (most expensive — full page content)
+      2. Auth-wall exclusion         (login/register pages are not bot blocks)
+      3. Current URL                 (cheap — already in memory)
+      4. Page <title>                (cheap — JS evaluate)
+      5. Raw HTML body               (most expensive — full page content)
 
     Args:
         page:     A Patchright ``Page`` object.
@@ -115,16 +119,26 @@ async def is_bot_detected(page, response=None) -> bool:
         except Exception:
             pass
 
-    # 2. URL check
+    current_url = ""
     try:
-        current_url = page.url.lower()
-        for kw in BLOCKED_URL_KEYWORDS:
-            if kw in current_url:
-                return True
+        current_url = (page.url or "").lower()
     except Exception:
         pass
 
-    # 3. Title check
+    # 2. Auth wall → not a bot block (handled separately by crawl policy)
+    try:
+        from webvac.auth.wall import is_auth_wall_page
+        if await is_auth_wall_page(page):
+            return False
+    except Exception:
+        pass
+
+    # 3. URL check
+    for kw in BLOCKED_URL_KEYWORDS:
+        if kw in current_url:
+            return True
+
+    # 4. Title check
     try:
         title = (await page.title()).lower()
         for pattern in BLOCKED_TITLES:
@@ -133,7 +147,7 @@ async def is_bot_detected(page, response=None) -> bool:
     except Exception:
         pass
 
-    # 4. Body check (only if cheaper checks passed)
+    # 5. Body check (only if cheaper checks passed)
     try:
         body = (await page.content()).lower()
         for pattern in BLOCKED_BODY_PATTERNS:
@@ -186,6 +200,8 @@ def is_bot_detected_sync(url: str, title: str, body: str, status: int | None = N
     """
     Synchronous variant for use in non-async contexts (e.g. post-extraction checks).
 
+    Login/auth walls are never reported as bot blocks.
+
     Args:
         url:    The page URL string.
         title:  The page title string.
@@ -197,6 +213,13 @@ def is_bot_detected_sync(url: str, title: str, body: str, status: int | None = N
     """
     if status is not None and status in BLOCKED_STATUS_CODES:
         return True
+
+    try:
+        from webvac.auth.wall import is_auth_wall
+        if is_auth_wall(url=url, title=title or "", html=body or ""):
+            return False
+    except Exception:
+        pass
 
     url_lower = url.lower()
     for kw in BLOCKED_URL_KEYWORDS:

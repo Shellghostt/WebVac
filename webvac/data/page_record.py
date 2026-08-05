@@ -41,7 +41,12 @@ class PageRecordBuilder:
             base_url=base_url or page_url,
             server_header=server_header,
         )
-        if is_bot_detected_sync(page_url, data.get("title", ""), html):
+        from webvac.auth.wall import is_auth_wall
+
+        if is_auth_wall(url=page_url, title=data.get("title", ""), html=html):
+            data["status"] = "auth_wall"
+            data["error"] = "Login/auth wall page (not scraped as content)"
+        elif is_bot_detected_sync(page_url, data.get("title", ""), html):
             data["status"] = "failed"
             data["error"] = "Bot/WAF challenge page detected"
         if screenshot:

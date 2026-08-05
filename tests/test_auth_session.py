@@ -78,6 +78,34 @@ class TestWall(unittest.TestCase):
         )
         self.assertFalse(is_auth_wall(url="https://x.com/dashboard", title="Home", html="<p>hi</p>"))
 
+    def test_amazon_auth_paths(self):
+        """Amazon account URLs are walls even with CAPTCHA markup in HTML."""
+        captcha_html = '<div class="g-recaptcha"></div><script src="recaptcha/api.js"></script>'
+        self.assertTrue(is_auth_wall(url="https://www.amazon.in/ap/signin?openid.ns=x", html=captcha_html))
+        self.assertTrue(is_auth_wall(url="https://www.amazon.in/ap/register", title="Amazon Registration"))
+        self.assertTrue(is_auth_wall(url="https://www.amazon.com/ap/signin"))
+
+    def test_auth_wall_record_not_failed(self):
+        from webvac.auth.wall import make_auth_wall_record
+
+        url = (
+            "https://www.amazon.in/ap/signin?openid.return_to="
+            "https%3A%2F%2Fwww.amazon.in%2F%3Fref_%3Dnav_ya_signin"
+        )
+        rec = make_auth_wall_record(url, policy="skip")
+        self.assertEqual(rec["status"], "auth_wall")
+        self.assertNotEqual(rec["status"], "failed")
+        self.assertIn("Auth wall", rec["error"])
+
+    def test_soft_password_title_wall(self):
+        self.assertTrue(
+            is_auth_wall(
+                url="https://shop.example/checkout",
+                title="Please Sign In",
+                html='<form><input type="password" name="pw"></form>',
+            )
+        )
+
     def test_logout(self):
         self.assertTrue(is_logout_url("https://x.com/logout"))
         self.assertTrue(is_logout_url("https://x.com/sign-out?x=1"))
@@ -86,6 +114,40 @@ class TestWall(unittest.TestCase):
     def test_policy(self):
         self.assertEqual(apply_wall_policy("relogin"), "relogin")
         self.assertEqual(apply_wall_policy("nope"), "skip")
+
+
+class TestBotVsAuthWall(unittest.TestCase):
+    def test_login_with_captcha_is_not_bot(self):
+        from webvac.utils.detection import is_bot_detected_sync
+
+        html = (
+            '<html><title>Amazon Sign-In</title>'
+            '<div class="g-recaptcha"></div>'
+            '<script src="https://www.google.com/recaptcha/api.js"></script>'
+            '<input type="password" name="password">'
+            "</html>"
+        )
+        url = "https://www.amazon.in/ap/signin?openid.return_to=%2F"
+        self.assertTrue(is_auth_wall(url=url, title="Amazon Sign-In", html=html))
+        self.assertFalse(is_bot_detected_sync(url, "Amazon Sign-In", html))
+
+    def test_real_cf_challenge_still_bot(self):
+        from webvac.utils.detection import is_bot_detected_sync
+
+        html = '<html><title>Just a moment...</title><div id="cf-challenge"></div></html>'
+        url = "https://example.com/products/1"
+        self.assertFalse(is_auth_wall(url=url, title="Just a moment...", html=html))
+        self.assertTrue(is_bot_detected_sync(url, "Just a moment...", html))
+
+    def test_page_record_marks_auth_wall(self):
+        from webvac.data.page_record import PageRecordBuilder
+
+        html = '<html><title>Sign In</title><input type="password"></html>'
+        data = PageRecordBuilder().from_html(
+            html, page_url="https://www.amazon.in/ap/signin",
+        )
+        self.assertEqual(data["status"], "auth_wall")
+        self.assertNotEqual(data.get("error"), "Bot/WAF challenge page detected")
 
 
 class TestProfile(unittest.TestCase):

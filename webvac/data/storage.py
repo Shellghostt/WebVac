@@ -441,7 +441,11 @@ class Storage:
 
         total   = len(data)
         success = sum(1 for p in data if p.get("status", "success") == "success")
-        failed  = total - success
+        auth_walls = sum(1 for p in data if p.get("status") == "auth_wall")
+        failed  = sum(1 for p in data if p.get("status") == "failed")
+        # Treat unknown non-success statuses as failed for the counter
+        other_fail = total - success - auth_walls - failed
+        failed += max(0, other_fail)
         total_words = sum(p.get("word_count", 0) for p in data)
         total_links = sum(len(p.get("links", [])) for p in data)
         total_images = sum(len(p.get("images", [])) for p in data)
@@ -477,7 +481,11 @@ class Storage:
         for i, page in enumerate(data):
             title = (page.get("title") or page.get("url", "Page"))[:45]
             status = page.get("status", "success")
-            dot_cls = "dot-ok" if status == "success" else "dot-fail"
+            dot_cls = (
+                "dot-ok" if status == "success"
+                else "dot-skip" if status == "auth_wall"
+                else "dot-fail"
+            )
             nav_items += f"""
             <a href="#page-{i}" class="nav-item" onclick="showPage({i})">
                 <span class="nav-dot {dot_cls}"></span>
@@ -509,11 +517,17 @@ class Storage:
             internal_links = [l for l in links if l.get("type") == "internal"]
             external_links = [l for l in links if l.get("type") == "external"]
 
-            status_badge = (
-                '<span class="badge badge-ok">✓ Success</span>'
-                if status == "success"
-                else f'<span class="badge badge-fail">✗ {self._esc(page.get("error","Failed"))}</span>'
-            )
+            if status == "success":
+                status_badge = '<span class="badge badge-ok">✓ Success</span>'
+            elif status == "auth_wall":
+                status_badge = (
+                    '<span class="badge badge-skip">⊘ Auth wall (skipped)</span>'
+                )
+            else:
+                status_badge = (
+                    f'<span class="badge badge-fail">✗ '
+                    f'{self._esc(page.get("error","Failed"))}</span>'
+                )
 
             # OG image preview
             og_img_html = ""
@@ -762,6 +776,7 @@ class Storage:
   .nav-dot {{ width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }}
   .dot-ok   {{ background: var(--ok); box-shadow: 0 0 6px var(--ok); }}
   .dot-fail {{ background: var(--fail); box-shadow: 0 0 6px var(--fail); }}
+  .dot-skip {{ background: var(--warn); box-shadow: 0 0 6px var(--warn); }}
   .nav-title {{ overflow: hidden; text-overflow: ellipsis; flex: 1; }}
 
   /* ── Main content ──────────────────────────────────────────────────── */
@@ -822,6 +837,7 @@ class Storage:
   .badge {{ padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }}
   .badge-ok   {{ background: rgba(34,197,94,0.15); color: var(--ok); border: 1px solid rgba(34,197,94,0.3); }}
   .badge-fail {{ background: rgba(239,68,68,0.15); color: var(--fail); border: 1px solid rgba(239,68,68,0.3); }}
+  .badge-skip {{ background: rgba(251,191,36,0.15); color: var(--warn); border: 1px solid rgba(251,191,36,0.35); }}
 
   /* ── Tabs ────────────────────────────────────────────────────────── */
   .tabs {{ display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }}
@@ -1024,6 +1040,10 @@ class Storage:
           <div class="stat-val">{failed}</div>
           <div class="stat-lbl">Failed / Blocked</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:var(--warn)">{auth_walls}</div>
+          <div class="stat-lbl">Auth Walls Skipped</div>
+        </div>
         <div class="stat-card stat-blue">
           <div class="stat-val">{total_words:,}</div>
           <div class="stat-lbl">Total Words</div>
@@ -1136,6 +1156,8 @@ class Storage:
         badge  = (
             '<span style="color:var(--ok);font-weight:600">✓</span>'
             if status == "success"
+            else '<span style="color:var(--warn);font-weight:600">⊘</span>'
+            if status == "auth_wall"
             else '<span style="color:var(--fail);font-weight:600">✗</span>'
         )
         return (
