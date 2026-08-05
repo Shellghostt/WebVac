@@ -15,35 +15,229 @@ from colorama import init, Fore, Style
 
 init(autoreset=True)
 
+# Prefer UTF-8 so box-drawing / symbols render on modern Windows terminals.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except Exception:
+    pass
+
+# ── Visual system ─────────────────────────────────────────────────────────────
+# Teal brand + amber accents (readable on dark/light terminals; avoids purple clichés)
+
+_C = Fore.CYAN
+_B = Fore.LIGHTCYAN_EX          # brand / emphasis
+_A = Fore.LIGHTYELLOW_EX        # accent / prompts
+_M = Fore.LIGHTBLACK_EX         # muted / meta
+_OK = Fore.LIGHTGREEN_EX
+_ERR = Fore.LIGHTRED_EX
+_W = Fore.WHITE
+_RST = Style.RESET_ALL
+_DIM = Style.DIM
+_BRIGHT = Style.BRIGHT
+
+_UI_WIDTH = 68
+
+
+def _unicode_ok() -> bool:
+    enc = (getattr(sys.stdout, "encoding", None) or "").lower()
+    return "utf" in enc
+
+
+def _box() -> dict[str, str]:
+    if _unicode_ok():
+        return {
+            "tl": "╭", "tr": "╮", "bl": "╰", "br": "╯",
+            "h": "─", "v": "│", "dot": "·", "ptr": "▸",
+            "ok": "✓", "err": "✗", "info": "›", "warn": "!",
+            "q": "?", "bullet": "·",
+        }
+    return {
+        "tl": "+", "tr": "+", "bl": "+", "br": "+",
+        "h": "-", "v": "|", "dot": ".", "ptr": ">",
+        "ok": "+", "err": "x", "info": ">", "warn": "!",
+        "q": "?", "bullet": "*",
+    }
+
+
+def _term_width() -> int:
+    try:
+        return max(56, min(shutil.get_terminal_size(fallback=(80, 24)).columns, 100))
+    except Exception:
+        return _UI_WIDTH
+
+
+def _rule(char: str | None = None, color: str = _M) -> None:
+    b = _box()
+    print(color + (char or b["h"]) * _term_width() + _RST)
+
+
+def _blank() -> None:
+    print()
+
 
 def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")
 
 
+def _version() -> str:
+    try:
+        from webvac import __version__
+        return __version__
+    except Exception:
+        return "?"
+
+
 def print_banner():
-    width = 65
-    print(Fore.CYAN + "=" * width)
-    print(Fore.CYAN + "   _      __     __    _   __            ")
-    print(Fore.CYAN + "  | | /| / /__  / /_  | | / /__ _  _____ ")
-    print(Fore.CYAN + "  | |/ |/ / -_)/ __/  | |/ / _ `/|/ ___/ ")
-    print(Fore.CYAN + "  |__/|__/\\__/ \\__/   |___/\\_,_/ |/      ")
-    print(Fore.CYAN + "                                         ")
-    print(Fore.CYAN + "     INTERACTIVE WEB SCRAPER MENU   ")
-    print(Fore.CYAN + "=" * width)
+    """Brand-forward hero for the interactive launcher."""
+    w = _term_width()
+    ver = _version()
+    b = _box()
+
+    print()
+    print(_B + b["tl"] + b["h"] * (w - 2) + b["tr"] + _RST)
+
+    logo = [
+        r"  __        __   _    __  __          ",
+        r"  \ \      / /__| |__ \ \/ /_ _  ___  ",
+        r"   \ \ /\ / / _ \ '_ \ \  / _` |/ __| ",
+        r"    \ V  V /  __/ |_) |/ \ (_| | (__  ",
+        r"     \_/\_/ \___|_.__/_/\_\__,_|\___| ",
+    ]
+    for line in logo:
+        pad = max(0, (w - 2 - len(line)) // 2)
+        print(
+            _B + b["v"] + _RST
+            + " " * pad + _BRIGHT + _B + line + _RST
+            + " " * max(0, w - 2 - pad - len(line))
+            + _B + b["v"] + _RST
+        )
+
+    tag = "asyncio scraper  ·  crawl  ·  recon" if _unicode_ok() else "asyncio scraper | crawl | recon"
+    pad = max(0, (w - 2 - len(tag)) // 2)
+    print(
+        _B + b["v"] + _RST
+        + " " * pad + _M + tag + _RST
+        + " " * max(0, w - 2 - pad - len(tag))
+        + _B + b["v"] + _RST
+    )
+
+    meta = f"v{ver}  ·  interactive launcher" if _unicode_ok() else f"v{ver}  |  interactive launcher"
+    pad = max(0, (w - 2 - len(meta)) // 2)
+    print(
+        _B + b["v"] + _RST
+        + " " * pad + _A + meta + _RST
+        + " " * max(0, w - 2 - pad - len(meta))
+        + _B + b["v"] + _RST
+    )
+
+    print(_B + b["bl"] + b["h"] * (w - 2) + b["br"] + _RST)
+    _blank()
+
+
+def print_menu(items: list[tuple[str, str, str]]) -> None:
+    """
+    Render the main action menu.
+
+    items: list of (key, title, description)
+    """
+    print(_M + "  Choose an action" + _RST)
+    _rule(_box()["dot"])
+    for key, title, desc in items:
+        print(
+            f"  {_A}{_BRIGHT}{key}{_RST}"
+            f"  {_W}{_BRIGHT}{title}{_RST}"
+        )
+        print(f"     {_M}{desc}{_RST}")
+    _rule(_box()["dot"])
+    _blank()
+
+
+def section(title: str) -> None:
+    """Wizard step header."""
+    b = _box()
+    _blank()
+    print(_B + b["ptr"] + " " + _BRIGHT + _W + title + _RST)
+    print(_M + "  " + b["h"] * min(40, _term_width() - 4) + _RST)
+
+
+def ui_ok(text: str) -> None:
+    b = _box()
+    print(f"  {_OK}{b['ok']}{_RST}  {text}")
+
+
+def ui_err(text: str) -> None:
+    b = _box()
+    print(f"  {_ERR}{b['err']}{_RST}  {_ERR}{text}{_RST}")
+
+
+def ui_info(text: str) -> None:
+    b = _box()
+    print(f"  {_C}{b['info']}{_RST}  {text}")
+
+
+def ui_warn(text: str) -> None:
+    b = _box()
+    print(f"  {_A}{b['warn']}{_RST}  {_A}{text}{_RST}")
 
 
 def prompt_password(prompt_text: str, default: Optional[str] = None) -> Optional[str]:
     """Read a password without echoing characters to the terminal."""
-    suffix = f" [{default}]" if default else ""
+    b = _box()
+    suffix = f" {_M}[{default}]{_RST}" if default else ""
     try:
         val = getpass.getpass(
-            Fore.YELLOW + f"{prompt_text}{suffix}: " + Style.RESET_ALL,
+            f"  {_A}{b['q']}{_RST}  {prompt_text}{suffix}: ",
         )
         val = val.strip()
         return val if val else default
     except (KeyboardInterrupt, EOFError):
         print("\n[Launcher] Cancelled.")
         sys.exit(0)
+
+
+def prompt_string(prompt_text, default=None):
+    b = _box()
+    suffix = f" {_M}[{default}]{_RST}" if default else ""
+    try:
+        val = input(f"  {_A}{b['q']}{_RST}  {prompt_text}{suffix}: ").strip()
+        return val if val else default
+    except (KeyboardInterrupt, EOFError):
+        print("\n[Launcher] Cancelled.")
+        sys.exit(0)
+
+
+def prompt_choice(prompt_text, choices, default_idx=0):
+    b = _box()
+    _blank()
+    print(f"  {_W}{_BRIGHT}{prompt_text}{_RST}")
+    for idx, choice in enumerate(choices, 1):
+        if idx - 1 == default_idx:
+            print(f"  {_A}{_BRIGHT}{idx}{_RST}  {_OK}{b['ptr']}{_RST} {_W}{choice}{_RST}")
+        else:
+            print(f"  {_M}{idx}{_RST}    {_M}{choice}{_RST}")
+
+    default_val = str(default_idx + 1)
+    while True:
+        try:
+            choice = input(
+                f"  {_A}{b['q']}{_RST}  Select {_M}(1-{len(choices)}) [{default_val}]{_RST}: "
+            ).strip()
+            if not choice:
+                return choices[default_idx]
+            val = int(choice)
+            if 1 <= val <= len(choices):
+                return choices[val - 1]
+            ui_err(f"Invalid choice. Pick 1-{len(choices)}.")
+        except ValueError:
+            ui_err("Enter a number.")
+        except (KeyboardInterrupt, EOFError):
+            print("\n[Launcher] Cancelled.")
+            sys.exit(0)
+
+
+def _hint(text: str) -> None:
+    print(f"  {_M}i  {text}{_RST}")
 
 
 @dataclass
@@ -156,44 +350,7 @@ def _redact_cmd_args(cmd_args: list[str]) -> list[str]:
     return redact_cmd_args(cmd_args)
 
 
-def prompt_string(prompt_text, default=None):
-    suffix = f" [{default}]" if default else ""
-    try:
-        val = input(Fore.YELLOW + f"{prompt_text}{suffix}: " + Style.RESET_ALL).strip()
-        return val if val else default
-    except (KeyboardInterrupt, EOFError):
-        print("\n[Launcher] Cancelled.")
-        sys.exit(0)
-
-
-def prompt_choice(prompt_text, choices, default_idx=0):
-    print(Fore.YELLOW + f"\n{prompt_text}:" + Style.RESET_ALL)
-    for idx, choice in enumerate(choices, 1):
-        mark = "->" if idx - 1 == default_idx else "  "
-        print(f"  {mark} {idx}. {choice}")
-
-    default_val = str(default_idx + 1)
-    while True:
-        try:
-            choice = input(Fore.GREEN + f"Select option (1-{len(choices)}) [{default_val}]: " + Style.RESET_ALL).strip()
-            if not choice:
-                return choices[default_idx]
-            val = int(choice)
-            if 1 <= val <= len(choices):
-                return choices[val - 1]
-            print(Fore.RED + f"Invalid choice. Please select 1 to {len(choices)}.")
-        except ValueError:
-            print(Fore.RED + "Please enter a valid number.")
-        except (KeyboardInterrupt, EOFError):
-            print("\n[Launcher] Cancelled.")
-            sys.exit(0)
-
-
 EXAMPLES_DIR = "examples"
-
-
-def _hint(text: str) -> None:
-    print(Fore.CYAN + f"  ℹ  {text}" + Style.RESET_ALL)
 
 
 def _list_candidate_files(
@@ -313,24 +470,42 @@ def run_command(cmd_args):
     display_args = _redact_cmd_args(cmd_args)
     command_str = " ".join([sys.executable, "-m", "webvac"] + display_args)
 
-    print(Fore.CYAN + "\n" + "=" * 65)
-    print(Fore.GREEN + "Constructed Command:")
-    print(Fore.WHITE + f"  {command_str}")
-    print(Fore.CYAN + "=" * 65 + "\n")
+    w = _term_width()
+    b = _box()
+    _blank()
+    print(_B + b["tl"] + b["h"] * (w - 2) + b["tr"] + _RST)
+    label = " ready to launch "
+    fill = max(0, w - 2 - len(label))
+    print(_B + b["v"] + _RST + _OK + _BRIGHT + label + _RST + _M + b["h"] * fill + _RST + _B + b["v"] + _RST)
+    print(_B + b["v"] + _RST + " " + _M + "command" + _RST + " " * max(0, w - 10) + _B + b["v"] + _RST)
+    max_inner = w - 4
+    remaining = command_str
+    while remaining:
+        chunk = remaining[:max_inner]
+        remaining = remaining[max_inner:]
+        pad = max(0, max_inner - len(chunk))
+        print(_B + b["v"] + _RST + " " + _W + chunk + _RST + " " * pad + " " + _B + b["v"] + _RST)
+    print(_B + b["bl"] + b["h"] * (w - 2) + b["br"] + _RST)
+    _blank()
+    ui_info("Starting scraper - live output below")
+    _rule()
+    _blank()
 
-    print(Fore.MAGENTA + "[Launcher] Starting scraper subprocess..." + Style.RESET_ALL)
+    process = None
     try:
-        # Run with live output streaming to terminal
         process = subprocess.Popen(
             command,
             stdout=sys.stdout,
             stderr=sys.stderr,
-            text=True
+            text=True,
         )
         process.wait()
+        _blank()
+        _rule()
         return process.returncode
     except KeyboardInterrupt:
-        print(Fore.YELLOW + "\n[Launcher] Process interrupted by user." + Style.RESET_ALL)
+        _blank()
+        ui_warn("Interrupted - stopping scraper")
         if process:
             process.terminate()
         return -1
@@ -367,25 +542,31 @@ def main():
     while True:
         clear_screen()
         print_banner()
+        print_menu([
+            ("1", "Quick scrape", "Single page — fast extract & report"),
+            ("2", "Site crawler", "BFS crawl — depth, limits, concurrency"),
+            ("3", "Scan library", "Browse scraped_data / diffs / reports"),
+            ("4", "Quit", "Exit the launcher"),
+        ])
 
-        print("  1. " + Fore.WHITE + "Quick Scrape (Single Page)" + Style.RESET_ALL)
-        print("  2. " + Fore.WHITE + "Recursive Crawler (Full Website)" + Style.RESET_ALL)
-        print("  3. " + Fore.WHITE + "View Scan Diff Reports Folder" + Style.RESET_ALL)
-        print("  4. " + Fore.WHITE + "Quit Launcher" + Style.RESET_ALL)
-        print(Fore.CYAN + "-" * 65)
-
-        action = prompt_choice("What would you like to do?", ["Single Page", "Website Crawler", "View Diff Folder", "Quit"], 0)
+        action = prompt_choice(
+            "What would you like to do?",
+            ["Single Page", "Website Crawler", "View Diff Folder", "Quit"],
+            0,
+        )
 
         if action == "Quit":
-            print(Fore.GREEN + "\nGoodbye! Happy Scraping.\n" + Style.RESET_ALL)
+            _blank()
+            print(f"  {_OK}Thanks for using WebVac.{_RST} {_M}See you next crawl.{_RST}\n")
             break
 
         if action == "View Diff Folder":
+            section("Scan library")
             base = "scraped_data"
             if not os.path.exists(base):
-                print(Fore.YELLOW + f"\nDirectory {base} does not exist yet (run a scan first)." + Style.RESET_ALL)
+                ui_warn(f"{base}/ does not exist yet — run a scan first.")
             else:
-                print(Fore.CYAN + f"\nScan output under {base}:" + Style.RESET_ALL)
+                ui_info(f"Output under {_W}{base}/{_RST}")
                 for target_dir in sorted(os.listdir(base)):
                     target_path = os.path.join(base, target_dir)
                     if not os.path.isdir(target_path):
@@ -398,33 +579,35 @@ def main():
                             d for d in os.listdir(scans_root)
                             if os.path.isdir(os.path.join(scans_root, d))
                         ])
-                    print(Fore.WHITE + f"\n  {target_dir} ({scan_count} scan(s))" + Style.RESET_ALL)
+                    _blank()
+                    print(f"  {_B}{_BRIGHT}{target_dir}{_RST}  {_M}{scan_count} scan(s){_RST}")
                     if os.path.isdir(diffs):
                         diff_files = sorted(os.listdir(diffs))
                         if diff_files:
-                            print(Fore.CYAN + f"    diffs/ ({len(diff_files)} file(s)):" + Style.RESET_ALL)
+                            print(f"    {_M}diffs/{_RST} {_C}{len(diff_files)} file(s){_RST}")
                             for f in diff_files[-5:]:
-                                print(f"      - {target_dir}/diffs/{f}")
+                                print(f"      {_M}·{_RST} {f}")
                         else:
-                            print("    diffs/ (empty)")
+                            print(f"    {_M}diffs/ (empty){_RST}")
                     if os.path.isdir(scans_root):
                         latest = sorted(os.listdir(scans_root))[-3:]
                         for s in latest:
-                            print(Fore.GREEN + f"    scans/{s}/" + Style.RESET_ALL)
-                            print("      scrape/report.html  assets/pdfs/")
-            input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
+                            print(f"    {_OK}scans/{s}/{_RST}")
+                            print(f"      {_M}scrape/report.html · assets/pdfs/{_RST}")
+            _blank()
+            input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
             continue
 
-        # Get target URL
+        section("Target")
         url = prompt_string("Enter target URL (e.g. https://example.com)")
         if not url:
-            print(Fore.RED + "Error: URL is required!")
-            input(Fore.YELLOW + "\nPress Enter to return to menu..." + Style.RESET_ALL)
+            ui_err("URL is required.")
+            input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
             continue
 
         cmd_args = ["--url", url]
 
-        # ── Authentication / Login wall ────────────────────────────────
+        section("Authentication")
         auth_needed = prompt_choice(
             "Do you need to scrape behind a login wall?",
             ["No", "Yes"],
@@ -447,13 +630,8 @@ def main():
                 )
                 if sess_file:
                     cmd_args += ["--session-file", sess_file]
-                # Defaults: no TTL expiry, skip mid-crawl auth walls
                 cmd_args += ["--on-auth-wall", "skip"]
-                print(
-                    Fore.CYAN
-                    + "[Auth] Defaults: on-auth-wall=skip, session-ttl=0 (no check URL)"
-                    + Style.RESET_ALL
-                )
+                ui_info("Defaults: on-auth-wall=skip, session-ttl=0 (no check URL)")
 
             elif session_mode.startswith("Manual"):
                 _hint("After you finish SSO in the browser, press ENTER to export storage_state")
@@ -467,8 +645,8 @@ def main():
                     "sessions/bootstrap_session.json",
                 )
                 if not sess_file:
-                    print(Fore.RED + "[Error] Session file is required for bootstrap." + Style.RESET_ALL)
-                    input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
+                    ui_err("Session file is required for bootstrap.")
+                    input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
                     continue
                 cmd_args += ["--auth-bootstrap", "--session-file", sess_file, "--no-headless"]
                 if bootstrap_url:
@@ -490,30 +668,25 @@ def main():
                 if "credentials JSON file" in cred_mode:
                     cred_path = select_auth_creds_file()
                     if not cred_path:
-                        print(Fore.RED + "[Error] Credentials JSON path is required." + Style.RESET_ALL)
-                        input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
+                        ui_err("Credentials JSON path is required.")
+                        input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
                         continue
                     try:
                         auth = _load_auth_from_json(cred_path)
-                        print(
-                            Fore.GREEN
-                            + f"[Auth] Loaded credentials from {cred_path}"
-                            + Style.RESET_ALL
-                        )
+                        ui_ok(f"Loaded credentials from {cred_path}")
                     except Exception as exc:
-                        print(Fore.RED + f"[Error] Failed to load credentials: {exc}" + Style.RESET_ALL)
-                        input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
+                        ui_err(f"Failed to load credentials: {exc}")
+                        input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
                         continue
                 else:
                     auth.username = prompt_string("Username / Email") or ""
                     auth.password = prompt_password("Password") or ""
 
                 if not auth.username or not auth.password:
-                    print(Fore.RED + "[Error] Username and password are required." + Style.RESET_ALL)
-                    input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
+                    ui_err("Username and password are required.")
+                    input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
                     continue
 
-                # Auto defaults (override only via auth profile JSON)
                 if not auth.login_url:
                     auth.login_url = url
                 if not auth.session_file:
@@ -523,47 +696,48 @@ def main():
                 if auth.session_ttl is None:
                     auth.session_ttl = 0
 
-                print(
-                    Fore.CYAN
-                    + "[Auth] Defaults: "
-                    + f"login_url={auth.login_url}, "
-                    + f"session={auth.session_file}, "
-                    + f"on-auth-wall={auth.on_auth_wall}, "
-                    + "ttl=0, otp=off"
-                    + (f", check={auth.auth_check_url}" if auth.auth_check_url else "")
-                    + Style.RESET_ALL
+                ui_info(
+                    f"login_url={auth.login_url} · session={auth.session_file} · "
+                    f"on-auth-wall={auth.on_auth_wall} · ttl=0 · otp=off"
+                    + (f" · check={auth.auth_check_url}" if auth.auth_check_url else "")
                 )
 
                 _apply_auth_config(cmd_args, auth)
 
-        # Mode configurations
+        section("Crawl settings" if action != "Single Page" else "Mode")
         if action == "Single Page":
             cmd_args += ["--mode", "single"]
+            ui_info("Single-page mode")
         else:
             cmd_args += ["--mode", "crawl"]
             depth = prompt_string("Max crawl depth", "3")
-            max_pages_input = prompt_string("Max pages to scrape [Enter for UNLIMITED \u221e full site crawl]", "")
+            max_pages_input = prompt_string(
+                "Max pages to scrape [Enter for UNLIMITED ∞ full site crawl]", ""
+            )
             concurrency = prompt_string("Parallel concurrency workers", "1")
             cmd_args += ["--depth", depth, "--concurrency", concurrency]
 
             if max_pages_input and max_pages_input.strip().isdigit():
                 cmd_args += ["--max-pages", max_pages_input.strip()]
                 n_pages = int(max_pages_input.strip())
-                # ETA estimate: avg 2s/page (1s delay_min) ÷ concurrency
                 avg_secs = max(1, 2 / max(1, int(concurrency)))
                 lo = int(n_pages * avg_secs)
                 hi = int(n_pages * max(avg_secs, 5))
-                def _fmt(s):
-                    m, sec = divmod(s, 60); h, m = divmod(m, 60)
-                    return f"{h}h {m}m {sec}s" if h else (f"{m}m {sec}s" if m else f"{sec}s")
-                print(Fore.CYAN + f"\n  \u23f1  Estimated crawl time: {_fmt(lo)} \u2013 {_fmt(hi)}  "
-                      f"(based on ~{avg_secs:.0f}s avg per page, concurrency={concurrency})" + Style.RESET_ALL)
-            else:
-                print(Fore.YELLOW + "\n  \u267e  Unlimited mode selected \u2014 crawling until every reachable page is visited." + Style.RESET_ALL)
-                print(Fore.CYAN +  "  \u23f1  Estimated time: depends entirely on site size. "
-                      "The crawler will keep running until the BFS queue is empty." + Style.RESET_ALL)
 
-        # Output format selection
+                def _fmt(s):
+                    m, sec = divmod(s, 60)
+                    h, m = divmod(m, 60)
+                    return f"{h}h {m}m {sec}s" if h else (f"{m}m {sec}s" if m else f"{sec}s")
+
+                ui_info(
+                    f"Estimated time: {_fmt(lo)} – {_fmt(hi)} "
+                    f"(~{avg_secs:.0f}s/page, concurrency={concurrency})"
+                )
+            else:
+                ui_warn("Unlimited mode — crawls until the BFS queue is empty.")
+                ui_info("ETA depends on site size.")
+
+        section("Output")
         fmt_choice = prompt_choice(
             "Select Output formats",
             [
@@ -579,75 +753,55 @@ def main():
             0,
         )
         fmt_map = {
-            "JSON, CSV & HTML Report (Default)":             "json,csv,html",
+            "JSON, CSV & HTML Report (Default)": "json,csv,html",
             "All formats (JSON, CSV, Markdown, SQLite, HTML)": "all",
-            "HTML Report only":                              "html",
-            "JSON & CSV only":                              "json,csv",
-            "JSON only":                                     "json",
-            "CSV only":                                      "csv",
-            "Markdown only":                                 "markdown",
-            "SQLite only":                                   "sqlite",
+            "HTML Report only": "html",
+            "JSON & CSV only": "json,csv",
+            "JSON only": "json",
+            "CSV only": "csv",
+            "Markdown only": "markdown",
+            "SQLite only": "sqlite",
         }
         cmd_args += ["--format", fmt_map[fmt_choice]]
 
-        # Robots.txt obeying
-        robots_choice = prompt_choice("How to handle robots.txt?", ["Respect rules & Crawl-delay (Polite)", "Bypass robots.txt completely (Use responsibly)", "Respect rules but ignore Crawl-delay"], 0)
+        section("Politeness & loading")
+        robots_choice = prompt_choice(
+            "How to handle robots.txt?",
+            [
+                "Respect rules & Crawl-delay (Polite)",
+                "Bypass robots.txt completely (Use responsibly)",
+                "Respect rules but ignore Crawl-delay",
+            ],
+            0,
+        )
         if robots_choice == "Bypass robots.txt completely (Use responsibly)":
             cmd_args.append("--no-robots")
         elif robots_choice == "Respect rules but ignore Crawl-delay":
             cmd_args.append("--ignore-crawl-delay")
 
-        # Robust wait-until loading strategy
-        wait_choice = prompt_choice("Page loading wait strategy", ["domcontentloaded (Recommended: fast, avoids dynamic connection timeouts)", "networkidle (Wait until full network traffic settles)", "load (Standard document load)"], 0)
-        wait_map = {
-            "domcontentloaded (Recommended: fast, avoids dynamic connection timeouts)": "domcontentloaded",
-            "networkidle (Wait until full network traffic settles)": "networkidle",
-            "load (Standard document load)": "load"
-        }
-        cmd_args += ["--wait-until", wait_map[wait_choice]]
-
-        # Cloudflare / origin bypass (CF-Hero)
-        origin_mode = prompt_choice(
-            "Cloudflare origin bypass?",
+        wait_choice = prompt_choice(
+            "Page loading wait strategy",
             [
-                "No (default)",
-                "Run CF-Hero now to discover origin IP",
-                "I already know the origin IP (--origin-ip)",
+                "domcontentloaded (Recommended: fast, avoids dynamic connection timeouts)",
+                "networkidle (Wait until full network traffic settles)",
+                "load (Standard document load)",
             ],
             0,
         )
-        if origin_mode.startswith("Run CF-Hero"):
-            cmd_args.append("--cf-hero")
-            sources = prompt_choice(
-                "CF-Hero OSINT sources (API keys configured in cf-hero.yaml)",
-                [
-                    "DNS only (no paid OSINT)",
-                    "Include Shodan (-shodan)",
-                    "Include Censys (-censys)",
-                    "Shodan + Censys + SecurityTrails + ZoomEye",
-                ],
-                0,
-            )
-            if "Shodan + Censys" in sources:
-                cmd_args += ["--cf-hero-args", "-shodan -censys -securitytrails -zoomeye"]
-            elif "Shodan" in sources:
-                cmd_args += ["--cf-hero-args", "-shodan"]
-            elif "Censys" in sources:
-                cmd_args += ["--cf-hero-args", "-censys"]
-            title = prompt_string(
-                "Expected HTML title for validation (enter to auto-detect)",
-                "",
-            )
-            if title:
-                cmd_args += ["--origin-title", title]
-            skip_val = prompt_choice(
-                "Skip title validation if CF-Hero finds candidates?",
-                ["No (safer)", "Yes (--skip-origin-validate)"],
-                0,
-            )
-            if skip_val.startswith("Yes"):
-                cmd_args.append("--skip-origin-validate")
-        elif origin_mode.startswith("I already know"):
+        wait_map = {
+            "domcontentloaded (Recommended: fast, avoids dynamic connection timeouts)": "domcontentloaded",
+            "networkidle (Wait until full network traffic settles)": "networkidle",
+            "load (Standard document load)": "load",
+        }
+        cmd_args += ["--wait-until", wait_map[wait_choice]]
+
+        section("Network")
+        origin_mode = prompt_choice(
+            "Origin IP bypass?",
+            ["No (default)", "Enter origin IP (--origin-ip)"],
+            0,
+        )
+        if origin_mode.startswith("Enter origin"):
             oip = prompt_string("Origin IP address")
             if oip:
                 cmd_args += ["--origin-ip", oip]
@@ -657,16 +811,14 @@ def main():
                 )
                 if title:
                     cmd_args += ["--origin-title", title]
+                skip_val = prompt_choice(
+                    "Skip title validation?",
+                    ["No (safer)", "Yes (--skip-origin-validate)"],
+                    0,
+                )
+                if skip_val.startswith("Yes"):
+                    cmd_args.append("--skip-origin-validate")
 
-        auto_cf = prompt_choice(
-            "Auto-run CF-Hero if a bot/WAF block is detected mid-crawl?",
-            ["Yes (default)", "No (--no-cf-hero-auto)"],
-            0,
-        )
-        if auto_cf.startswith("No"):
-            cmd_args.append("--no-cf-hero-auto")
-
-        # Proxy configurations
         use_proxy = prompt_choice(
             "Do you want to use proxies?",
             ["No (Direct Connection)", "Yes, from a file pool (--proxy-file)"],
@@ -683,18 +835,26 @@ def main():
                 )
                 strategy_val = "latency" if "latency" in strategy else strategy
                 cmd_args += ["--proxy-strategy", strategy_val]
-                sticky = prompt_string("Sticky requests per proxy before rotate (0 = every request)", "10")
+                sticky = prompt_string(
+                    "Sticky requests per proxy before rotate (0 = every request)", "10"
+                )
                 if sticky and sticky.isdigit():
                     cmd_args += ["--sticky-requests", sticky]
 
-        # Optional item pipeline
         pipe = select_pipeline_file()
         if pipe:
             cmd_args += ["--pipeline-file", pipe]
 
-        # Headless mode configurations
-        headless_choice = prompt_choice("Run browser in headless mode?", ["Yes (Invisible background, fastest)", "No (Visible headed window, useful to bypass/see captchas)"], 0)
-        if headless_choice == "No (Visible headed window, useful to bypass/see captchas)":
+        section("Browser")
+        headless_choice = prompt_choice(
+            "Run browser in headless mode?",
+            [
+                "Yes (Invisible background, fastest)",
+                "No (Visible headed window, useful to bypass/see captchas)",
+            ],
+            0,
+        )
+        if headless_choice.startswith("No"):
             cmd_args.append("--no-headless")
             pause_consent = prompt_choice(
                 "Pause after first page so you can Accept cookie banners?",
@@ -707,32 +867,40 @@ def main():
             if pause_consent.startswith("Yes"):
                 cmd_args.append("--pause-for-consent")
         else:
-            print(
-                Fore.CYAN
-                + "[Consent] Auto-dismiss CMP on every page (use --no-headless + pause if needed)"
-                + Style.RESET_ALL
-            )
+            ui_info("Auto-dismiss CMP on every page (headed + pause if you need manual Accept)")
 
-        # Screenshots of blocked/CAPTCHA pages
         screenshot_choice = prompt_choice(
             "Capture screenshots of CAPTCHA / bot-blocked pages?",
-            ["Yes (save PNG to scraped_data/screenshots/)", "No (disable screenshots)"],
+            [
+                "Yes (save PNG to scraped_data/screenshots/)",
+                "No (disable screenshots)",
+            ],
             0,
         )
-        if screenshot_choice == "No (disable screenshots)":
+        if screenshot_choice.startswith("No"):
             cmd_args.append("--no-screenshots")
 
         if action == "Website Crawler":
             cmd_args.append("--allow-subdomains")
-            print(
-                Fore.CYAN
-                + "[Crawl] Including subdomains automatically (--allow-subdomains)"
-                + Style.RESET_ALL
-            )
+            ui_info("Including subdomains (--allow-subdomains)")
 
-        # Run configured command
-        run_command(cmd_args)
-        input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
+        rc = run_command(cmd_args)
+        status_note = "completed" if rc == 0 else f"finished (exit code {rc})"
+        if rc == 0:
+            ui_ok(f"Scan {status_note}.")
+        else:
+            ui_warn(f"Scan {status_note}.")
+
+        next_action = prompt_choice(
+            "What next?",
+            ["Quit", "Return to main menu (another scan)"],
+            0,
+        )
+        if next_action == "Quit":
+            _blank()
+            print(f"  {_OK}Thanks for using WebVac.{_RST} {_M}See you next crawl.{_RST}\n")
+            break
+
 
 
 if __name__ == "__main__":
