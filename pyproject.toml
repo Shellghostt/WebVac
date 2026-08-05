@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "webvac"
 version = "0.2.0"
-description = "Asyncio dynamic web scraper with auth, CF-Hero origin bypass, and optional VAPT recon."
+description = "Asyncio dynamic web scraper with auth, manual origin IP bypass, and optional VAPT recon."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }

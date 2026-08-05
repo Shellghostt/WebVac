@@ -192,7 +192,7 @@
           <div class="box">
             <div class="box-title">core/scraper.py</div>
             <div class="box-path">CLI orchestrator</div>
-            <div class="box-desc">Parses args, resolves origin (CF-Hero), starts browser pool, runs crawl, persists output.</div>
+            <div class="box-desc">Parses args, resolves manual origin IP, starts browser pool, runs crawl, persists output.</div>
           </div>
           <div class="box">
             <div class="box-title">config/config.py</div>
@@ -211,7 +211,7 @@
           </div>
           <div class="box">
             <div class="box-title">core/page_scrape_flow.py</div>
-            <div class="box-desc">goto → challenge wait → bot detect → retry / CF-Hero / evasion / CAPTCHA.</div>
+            <div class="box-desc">goto → challenge wait → bot detect → retry / evasion / CAPTCHA + network debug dump.</div>
           </div>
           <div class="box">
             <div class="box-title">scope/scope_manager.py</div>
@@ -331,7 +331,8 @@
               <div class="feat"><span class="feat-ok">✓</span> BFS &amp; single-page crawl</div>
               <div class="feat"><span class="feat-ok">✓</span> Concurrent context pool</div>
               <div class="feat"><span class="feat-ok">✓</span> Proxy rotation</div>
-              <div class="feat"><span class="feat-ok">✓</span> CF-Hero origin bypass</div>
+              <div class="feat"><span class="feat-ok">✓</span> Manual origin-IP Host bypass</div>
+              <div class="feat"><span class="feat-ok">✓</span> Network debug dumps on scrape failure</div>
               <div class="feat"><span class="feat-ok">✓</span> Bot/WAF evasion</div>
               <div class="feat"><span class="feat-ok">✓</span> JSON/CSV/HTML reports</div>
               <div class="feat"><span class="feat-ok">✓</span> Login &amp; sessions</div>

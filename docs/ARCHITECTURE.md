@@ -1,7 +1,7 @@
 # WebVac — Full System Architecture
 
 **Last updated:** 2026-07-27  
-**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [CF-Hero](architecture/CF_HERO.md) · [VAPT Pipeline](architecture/VAPT.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
+**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [VAPT Pipeline](architecture/VAPT.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
 
 ---
 
@@ -25,7 +25,6 @@ flowchart LR
   WebVac --> Proxy["Proxy Pool"]
   WebVac --> Disk["scraped_data/"]
   WebVac --> Sess["sessions/ storage_state"]
-  WebVac -.->|optional| CFHero["CF-Hero binary"]
 ```
 
 ---
@@ -62,7 +61,7 @@ flowchart TB
     Proxy[utils/proxy.py]
     Robots[utils/robots.py]
     Origin[utils/origin_probe.py]
-    CF[utils/cf_hero.py]
+    NetDbg[utils/network_debug.py]
   end
 
   subgraph dataLayer [Data Layer]
@@ -94,7 +93,6 @@ flowchart TB
   Crawler --> Proxy
   Crawler --> Robots
   Crawler --> Origin
-  Crawler --> CF
   Flow --> Parse
   Parse --> Rec
   Rec --> Pipe
@@ -150,7 +148,7 @@ sequenceDiagram
 | `run.py` | Interactive launcher → builds argv → invokes scraper |
 | `core/` | CLI orchestration, BFS crawler, per-page flow, user pipelines, VAPT runner |
 | `auth/` | Login, sessions, MFA, walls, profiles |
-| `utils/` | Browser pool, proxies, robots, detection, CF-Hero, screenshots, assets |
+| `utils/` | Browser pool, proxies, robots, detection, origin probe, network debug, screenshots, assets |
 | `data/` | HTML parse, page records, multi-format export, recon report writer |
 | `config/` | Defaults + VAPT scan profiles |
 | `scope/` | Domain / depth / URL allow-deny |
@@ -259,7 +257,8 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 | AuthManager (Patchright) | Active |
 | Session restore / TTL / Fernet | Active |
 | Mid-crawl auth-wall policy | Active |
-| CF-Hero / origin Host bypass | Active |
+| Manual origin IP / Host bypass | Active |
+| Network debug dumps on scrape failures | Active (default on) |
 | Bot detection + CAPTCHA prompt | Active |
 | Multi-format export + diffs | Active |
 | PDF / sourcemap download | Active |
@@ -288,7 +287,7 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 | [architecture/AUTH.md](architecture/AUTH.md) | Login, sessions, MFA, walls, bootstrap |
 | [architecture/CRAWL.md](architecture/CRAWL.md) | Crawler, page flow, browser pool |
 | [architecture/DATA.md](architecture/DATA.md) | Parse, records, storage, scan layout |
-| [architecture/PROXY_ORIGIN.md](architecture/PROXY_ORIGIN.md) | Proxies, robots, CF-Hero, origin |
+| [architecture/PROXY_ORIGIN.md](architecture/PROXY_ORIGIN.md) | Proxies, robots, manual origin IP |
 | [architecture/VAPT.md](architecture/VAPT.md) | Collectors → analyzers → findings |
 
 Open the visual one-pager: [`webvac-architecture-one-page.html`](webvac-architecture-one-page.html).

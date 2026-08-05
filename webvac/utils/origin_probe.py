@@ -14,6 +14,21 @@ from bs4 import BeautifulSoup
 
 from webvac.models.origin import OriginTarget
 
+_CF_PREFIXES = (
+    "103.21.244.", "103.22.200.", "103.31.4.",
+    "104.16.", "104.17.", "104.18.", "104.19.", "104.20.", "104.21.",
+    "104.22.", "104.23.", "104.24.", "104.25.", "104.26.", "104.27.",
+    "104.28.", "131.0.72.",
+    "141.101.", "162.158.", "172.64.", "172.65.", "172.66.", "172.67.",
+    "172.68.", "172.69.", "172.70.", "172.71.",
+    "173.245.", "188.114.", "190.93.", "197.234.", "198.41.",
+)
+
+
+def is_cloudflare_ip(ip: str) -> bool:
+    return any(ip.startswith(p) for p in _CF_PREFIXES)
+
+
 _TITLE_RE = re.compile(r"<title[^>]*>([^<]+)</title>", re.I)
 
 
@@ -151,13 +166,8 @@ async def probe_ip_candidates(
     if not ip or ip in seen:
       continue
     seen.add(ip)
-    # Skip Cloudflare edge IPs if caller forgot to filter
-    try:
-      from webvac.utils.cf_hero import is_cloudflare_ip
-      if is_cloudflare_ip(ip):
-        continue
-    except Exception:
-      pass
+    if is_cloudflare_ip(ip):
+      continue
     origin = OriginTarget(
       hostname=hostname,
       origin_ip=ip,

@@ -1,7 +1,7 @@
 # Proxy, Robots & Origin Architecture
 
 **Parent:** [Full System Architecture](../ARCHITECTURE.md)  
-**Code:** `utils/proxy.py`, `utils/robots.py`, `utils/cf_hero.py`, `utils/origin_probe.py`, `utils/detection.py`
+**Code:** `utils/proxy.py`, `utils/robots.py`, `utils/origin_probe.py`, `utils/detection.py`, `utils/network_debug.py`
 
 ---
 
@@ -9,7 +9,8 @@
 
 - Route traffic through healthy proxies with strategy + cooldown.
 - Obey robots.txt (unless explicitly disabled).
-- Optionally scrape via **origin IP + Host header** when CDN edge blocks the browser (authorized use only).
+- Optionally scrape via **origin IP + Host header** when CDN edge blocks the browser (authorized use only — manual IP only).
+- Persist network debug dumps on scrape failures for diagnosis.
 
 ---
 
@@ -20,14 +21,12 @@ flowchart TB
   Scraper --> Proxy[ProxyManager]
   Scraper --> Robots[RobotsHandler]
   Scraper --> Origin[_resolve_origin_access]
-  Origin --> CF[cf_hero.discover_origin]
   Origin --> Probe[origin_probe.validate_origin]
   Proxy --> Slots[per-slot proxy entries]
   Crawler --> Proxy
   Crawler --> Robots
-  Crawler --> CF
   Flow[page_scrape_flow] --> Det[detection]
-  Det -->|block| CF
+  Flow --> NetDbg[network_debug dumps]
 ```
 
 ---
@@ -82,16 +81,12 @@ Flags:
 
 ---
 
-## 5. Origin / CF-Hero path
+## 5. Origin path (manual IP only)
 
 ```mermaid
 flowchart TD
-  Need[CDN / bot block or --cf-hero / --origin-ip] --> Mode{mode}
-  Mode -->|manual| IP[--origin-ip]
-  Mode -->|discover| Hero[run cf-hero binary]
-  Hero --> Cand[candidate origin IPs]
+  Need[CDN / bot block or --origin-ip] --> IP[--origin-ip]
   IP --> Val[validate_origin title check]
-  Cand --> Val
   Val -->|ok| OriginTarget[OriginTarget model]
   OriginTarget --> Browser[Host header / host resolver reconfig]
   OriginTarget --> Light[lightweight fetch_via_origin]
@@ -99,27 +94,35 @@ flowchart TD
 
 | Piece | Role |
 |-------|------|
-| `utils/cf_hero.py` | Locate binary, run, parse IPs |
-| `utils/origin_probe.py` | Title validation, origin HTTP fetch |
+| `utils/origin_probe.py` | Title validation, origin HTTP fetch, Cloudflare IP filter |
 | `models/origin.py` | `OriginTarget` dataclass |
 | `BrowserManager.reconfigure_host_resolver` | Point hostname → origin IP in browser |
 
-**Auto fallback:** on persistent bot block, crawler may invoke CF-Hero if `cf_hero_auto_fallback` is true (`--no-cf-hero-auto` disables).
+There is **no automatic origin discovery**. Operators must supply `--origin-ip` explicitly.
 
 ---
 
-## 6. Decision matrix
+## 6. Network debug
+
+On scrape failures or bot/challenge detection, `utils/network_debug.py` writes JSON summaries under `{output_dir}/_network_debug/`. Controlled by session config:
+
+- `network_debug` (default `True`) — enable dumps on failures  
+- `network_debug_always` (default `False`) — dump on every page  
+
+---
+
+## 7. Decision matrix
 
 | Situation | Preferred action |
 |-----------|------------------|
 | Normal scrape | Direct or proxy via Patchright |
 | Soft rate limit | Delay + sticky rotate |
-| Hard bot wall | Stealth → CF-Hero → CAPTCHA |
+| Hard bot wall | Stealth → proxy rotate → CAPTCHA |
 | Authenticated crawl | Pin proxy; avoid voluntary rotate |
-| Authorized origin recon | `--origin-ip` or `--cf-hero` |
+| Authorized origin recon | `--origin-ip` (manual only) |
 
 ---
 
-## 7. Security / ethics note
+## 8. Security / ethics note
 
-Origin-IP scraping and CF-Hero bypass can violate target ToS and laws if unauthorized. Architecture supports these only as **opt-in operator tools** with validation guards (`expected_title`) to reduce accidental misrouting.
+Origin-IP scraping can violate target ToS and laws if unauthorized. Architecture supports this only as an **opt-in operator tool** with validation guards (`expected_title`) to reduce accidental misrouting.

@@ -16,7 +16,7 @@ class OriginTarget:
     port: int = 443
     expected_title: str = ""
     validated: bool = False
-    source: str = "manual"  # manual | cf-hero | probe
+    source: str = "manual"  # manual | probe
 
     def host_header(self) -> str:
         if (self.scheme == "https" and self.port == 443) or (

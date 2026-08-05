@@ -24,7 +24,7 @@ WebVac/
     │   └── interactive.py      # menu launcher
     ├── core/                   # crawler, page flow, pipelines, VAPT runner
     ├── auth/                   # AuthManager, sessions, MFA, walls
-    ├── utils/                  # browser, proxies, CF-Hero, robots, …
+    ├── utils/                  # browser, proxies, origin probe, robots, network debug, …
     ├── data/                   # parse, page records, storage
     ├── config/
     ├── models/

@@ -17,7 +17,7 @@
 | VAPT collectors → analyzers → findings | Built | **Essential — currently unwired** |
 | Interactive `run.py` / CAPTCHA ENTER | Strong as desktop UX | **Remove from server path** |
 | OAuth bootstrap (optional) | Useful locally | **Demote** for remote BAS |
-| CF-Hero auto origin bypass | Powerful | **Gate hard** (ethics/scope) |
+| Manual origin IP bypass | Supported | **Gate hard** (ethics/scope) |
 
 **Biggest gap:** the VAPT stack exists (`collectors/`, `analyzers/`, `findings/`, `core/runner.py`) but `vapt_enabled` defaults to `False` and `PipelineRunner` is **never called** from `webvac/cli/scraper.py`. MCP would wrap a scraper, not a BAS recon engine, until that is wired.
 
@@ -67,7 +67,7 @@
 | Diff generation | **Off / optional** | Orchestrator owns history |
 | HTML/CSV/MD reports as default | **JSON only** for MCP jobs | Smaller, machine-readable |
 | `tqdm` / colorama in agent mode | **Replace with logging** | Non-TTY / JSON logs |
-| CF-Hero **auto** fallback | **Default OFF** | Scope/ethics risk |
+| Manual `--origin-ip` only | **Require explicit permission** | Scope/ethics risk |
 | Unlimited crawl (`max_pages` omit) | **Forbid in MCP** | Accidental DoS |
 | Default-cred auto-login | **Never** | Intelligence only, never exploit |
 
@@ -156,7 +156,7 @@ auth_restore | auth_login
 
 1. **Authorization** — BAS must only target in-scope assets; WebVac won’t know engagement contracts.  
 2. **Active probes** — intrusive GETs (`/.git`, `/.env`, swagger); opt-in + logged.  
-3. **CF-Hero / origin IP** — can bypass CDN/WAF; never auto; require explicit permission.  
+3. **Origin IP (`--origin-ip`)** — can bypass CDN/WAF; manual only; require explicit permission.  
 4. **Auth-wall skip** — under-reports authenticated surface; wrong for simulations.  
 5. **Resource abuse** — high concurrency / unlimited pages can look like DoS.  
 6. **Secrets** — never log passwords; encrypt sessions; inject via env/secret store.
@@ -173,7 +173,7 @@ auth_restore | auth_login
 | P1 | MCP server package wrapping job API |
 | P1 | Linux Docker image + Patchright deps |
 | P1 | Default JSON-only; PDFs/diffs/screenshots opt-in |
-| P2 | Gate CF-Hero + active probes behind policy flags |
+| P2 | Gate manual origin IP + active probes behind policy flags |
 | P2 | Demote bootstrap from server image |
 | P2 | Replace print/tqdm with structured logging |
 | P3 | Keep `run.py` as optional local operator tool only |

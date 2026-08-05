@@ -52,13 +52,12 @@ This release packages WebVac as an installable `webvac/` module, removes Nodrive
 ### 2.5 Anti-scraping hardening
 - Honeypot link filter in HTML parser (`display:none`, `visibility:hidden`, hidden classes)
 - `Sec-Fetch-*` request headers on browser contexts
-- CF-Hero integration already corrected earlier (`-f` tempfile CLI)
+- Network debug dumps on scrape failures (`_network_debug/`)
 
 ### 2.6 Documentation
 - `docs/architecture/AUTH.md` — Patchright-only
 - `README.md` — consent flags, no Nodriver
 - `docs/BAS_MCP_LINUX_ROADMAP.md` — remote BAS planning
-- `docs/architecture/CF_HERO.md` — CF-Hero flow
 
 ---
 
@@ -80,7 +79,7 @@ This release packages WebVac as an installable `webvac/` module, removes Nodrive
 | Proxy quality | Code supports pools; success is operational |
 
 ### UX
-Interactive menu still prompts for format, robots, wait-until, CF-Hero/origin, proxies, pipeline, headless, screenshots, crawl depth/pages/concurrency.
+Interactive menu still prompts for format, robots, wait-until, origin IP, proxies, pipeline, headless, screenshots, crawl depth/pages/concurrency.
 
 ### Ops
 | Gap | Notes |

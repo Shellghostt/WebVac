@@ -80,7 +80,7 @@ flowchart TD
   After --> AuthW[auth-wall check]
   AuthW -->|abort/skip/relogin| AuthOut[policy branch]
   AuthW -->|ok| Bot{bot detected?}
-  Bot -->|yes| Evade[stealth / CF-Hero / rotate / CAPTCHA]
+  Bot -->|yes| Evade[stealth / rotate / CAPTCHA]
   Bot -->|no| Scroll[_scroll_page]
   Evade -->|still blocked| Fail[screenshot + None]
   Evade -->|ok| Scroll
@@ -138,8 +138,7 @@ Key APIs: `start`, `new_page(slot)`, `rotate_proxy`, `set_auth_session`, `broadc
 ```mermaid
 flowchart TD
   Block[Bot / challenge detected] --> Stealth[stealth retry + warmup]
-  Stealth -->|fail| CF[CF-Hero auto origin if enabled]
-  CF -->|fail| Rotate[proxy rotate + backoff]
+  Stealth -->|fail| Rotate[proxy rotate + backoff]
   Rotate -->|fail| Referrer[Google referrer trick]
   Referrer -->|fail| Captcha[optional --no-headless CAPTCHA prompt]
   Captcha -->|fail| GiveUp[record failure / screenshot]
