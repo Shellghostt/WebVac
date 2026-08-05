@@ -9,13 +9,16 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Concurrency support with isolated browser slot identities
 - Proxy pools with latency-based selection, round-robin, or random strategy
 - robots.txt support with optional crawl-delay override
-- Cloudflare-origin bypass helpers (manual origin IP and CF-Hero integration)
+- Manual origin IP bypass (CDN edge → origin via Host header)
 - Automatic screenshots for blocked/CAPTCHA pages
 - Structured output in JSON, CSV, HTML, Markdown, SQLite, or all formats
 - Historical scan sessions and diff generation between runs
 - PDF and sourcemap asset download support
 - Unified auth: Patchright login, session restore, MFA/TOTP, OAuth bootstrap
-- Mid-crawl auth-wall handling, logout URL deny, and sticky proxy when authenticated
+- Auth walls (`/login`, `/ap/signin`, …) skipped separately from bot/WAF blocks
+- Human-like mouse/scroll/warmup on Patchright Chromium (`--no-humanize` to disable)
+- Network debug dumps on scrape failures (`scraped_data/_network_debug/`)
+- Logout URL deny and sticky proxy when authenticated
 - Optional VAPT/recon pipeline present in codebase (disabled by default)
 
 ## Project Structure
@@ -26,7 +29,7 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 - `webvac/cli/scraper.py`: Main CLI orchestrator (`python -m webvac`)
 - `webvac/core/`: BFS crawler, page scrape flow, pipelines, VAPT runner
 - `webvac/auth/`: AuthManager, sessions, MFA, auth-wall detection
-- `webvac/utils/`: Browser, proxies, robots, CF-Hero, screenshots
+- `webvac/utils/`: Browser, proxies, robots, origin probe, screenshots, network debug
 - `webvac/data/`: HTML parse, page records, storage/export
 - `webvac/collectors|analyzers|findings|active/`: Optional VAPT stack (default off)
 - `examples/`: Input templates (auth, proxies, session, pipeline) — see [`examples/README.md`](examples/README.md)
@@ -115,6 +118,8 @@ python -m webvac --url https://example.com --mode crawl --depth 3 --max-pages 50
 - `--no-headless`: Run browser in visible mode
 - `--timeout`: Page load timeout in milliseconds
 - `--wait-until domcontentloaded|load|networkidle`: Navigation wait strategy
+- `--no-humanize`: Disable Bezier mouse paths, wheel scroll, per-host warmup, and post-load settle
+- `--no-humanize-warmup`: Keep settle/scroll humanize but skip the once-per-host root visit
 
 ### Output
 
@@ -177,23 +182,22 @@ python -m webvac --url https://example.com/dashboard --mode single \
 - `--cooldown-seconds SECS`: Cooldown after 429/timeout
 - `--no-health-check`: Skip startup benchmark
 
-### Origin bypass / CF-Hero
+### Origin bypass (manual IP)
 
-Requires [CF-Hero](https://github.com/musana/CF-Hero) on PATH (`go install -v github.com/musana/cf-hero/cmd/cf-hero@latest`).
+When you already know the origin server IP (authorized use only):
 
-- `--origin-ip IP`: Scrape using origin IP + Host header
-- `--cf-hero`: Discover origin IP via CF-Hero first (uses `-f` tempfile — correct CF-Hero CLI)
-- `--cf-hero-bin PATH`: Explicit CF-Hero executable path
-- `--cf-hero-args "..."`: Extra flags (e.g. `"-shodan -censys -securitytrails -zoomeye"`)
-- `--cf-hero-timeout SECS`: CF-Hero process timeout (default 300)
-- `--cf-hero-workers N`: CF-Hero `-w` worker count
-- `--cf-hero-quiet`: Omit CF-Hero `-v`
-- `--cf-hero-log FILE`: Save raw CF-Hero output
-- `--origin-title TITLE`: Expected title for validation (also passed as CF-Hero `-title`)
-- `--skip-origin-validate`: Use discovered/manual IP without title check
-- `--no-cf-hero-auto`: Disable mid-crawl auto discovery on bot/WAF blocks
+- `--origin-ip IP`: Scrape via origin IP with Host header (CDN edge bypass)
+- `--origin-title TITLE`: Expected HTML title for origin validation
+- `--skip-origin-validate`: Use manual IP without title validation
 
-See [`docs/architecture/CF_HERO.md`](docs/architecture/CF_HERO.md).
+### Network diagnosis (default on)
+
+Listeners attach on every dynamic page load (document, script, xhr/fetch/websocket + failed resources). On scrape failure, dumps go to `{output}/_network_debug/*.json` with status histogram and root-cause hints.
+
+- `--no-network-debug`: Disable listeners and dumps
+- `--network-debug-always`: Also dump on successful pages
+
+Auth/login URLs (`/ap/signin`, `/login`, `/register`, …) are classified as `auth_wall` and skipped — they do **not** trigger bot retries or proxy rotation. Reports show them under “Auth Walls Skipped”.
 
 ## Proxy File Format
 
@@ -244,8 +248,7 @@ scraped_data/
 - [`docs/architecture/AUTH.md`](docs/architecture/AUTH.md) — Authentication / sessions / MFA / auth-walls
 - [`docs/architecture/CRAWL.md`](docs/architecture/CRAWL.md) — Crawler, page flow, browser pool
 - [`docs/architecture/DATA.md`](docs/architecture/DATA.md) — Parsing, page records, storage layout
-- [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, CF-Hero / origin
-- [`docs/architecture/CF_HERO.md`](docs/architecture/CF_HERO.md) — Complete CF-Hero CLI + validation flow
+- [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, manual origin IP
 - [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md) — Optional collectors → analyzers → findings
 - [`docs/CHANGES_AND_IMPROVEMENTS.md`](docs/CHANGES_AND_IMPROVEMENTS.md) — Recent changes + improvement ideas
 - [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — One-page visual architecture
@@ -292,7 +295,9 @@ python -m unittest discover -s tests -p "test_*.py"
 - Enable proxies and use latency strategy.
 - Lower concurrency.
 - Increase delays between requests.
+- Keep humanize enabled (default); try `--no-headless` for hard challenges.
 - Use origin mode only when authorized.
+- Inspect `{output}/_network_debug/*.json` for challenge/CAPTCHA URL hints.
 
 ### Empty or partial data
 
