@@ -35,7 +35,8 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  File[proxies.txt / --proxies] --> PM[ProxyManager]
+  File[proxies.txt / --proxies] --> Playbook[--proxy-playbook]
+  Playbook --> PM[ProxyManager]
   PM --> Bench[benchmark_all latency]
   Bench --> Pool[healthy pool]
   Pool --> Strat{strategy}
@@ -49,9 +50,39 @@ flowchart LR
   Sticky -->|hit| VolRotate[voluntary rotate]
   Err[429 / timeout] --> Cool[cooldown_seconds]
   Cool --> Pool
+  PM --> Ident[pinned UA + geo + timezone per IP]
+  Ident --> Slot
 ```
 
 **Auth interaction:** when authenticated / `--login`, voluntary rotate on slot 0 is suppressed (`auth_pin_proxy`). Forced rotate reinjects `storage_state` and may re-verify `--auth-check-url`.
+
+**Pool rules:**
+
+- Concurrent slots get **distinct** proxies while the pool lasts; only wrap when `concurrency > pool size`.
+- Bot/challenge: stealth retry on the same IP, then **one** cooldown strike + rotate (not two).
+- Timeouts → transient cooldown; connection/proxy refused → hard failure counter.
+- Sole proxy after 429: wait up to 30s then reuse the same IP (do not abort the crawl).
+- SOCKS health-check uses `aiohttp-socks` when installed; otherwise SOCKS lines stay active (not retired).
+- `sticky_requests=0` disables voluntary rotate (does **not** mean rotate every request).
+
+### Residential playbook
+
+Use `--proxy-playbook residential` with a residential proxy file:
+
+| Setting | Default applied |
+|---------|-----------------|
+| `sticky_requests` | 25 (keep exit IP for cookies / rate windows) |
+| `proxy_strategy` | `latency` |
+| `proxy_cooldown_seconds` | 600 |
+| Identity | Each proxy locks UA + Sec-CH-UA + US city geo + matching timezone |
+
+Explicit `--sticky-requests` / `--proxy-strategy` / `--cooldown-seconds` still win when they differ from global config defaults.
+
+**Provider sticky sessions:** many residential vendors pin the ISP IP via username tokens (e.g. `user-session-abc123` or `user-country-us-session-xyz`). Put that username in `proxies.txt` as `http://host:port|user-session-…|password` so the vendor sticky window aligns with WebVac’s `sticky_requests` counter.
+
+**Geo match:** `ProxyManager` assigns one identity from a curated pool so the same source IP always presents the same device + timezone. Browser contexts consume `SlotIdentity.timezone` / lat / lon instead of picking a random city that would disagree with the UA pin.
+
+Datacenter playbook (`--proxy-playbook datacenter`): sticky=5, round-robin, shorter cooldown, **geo not pinned** (`pin_geo=False`) so timezone can rotate independently of UA.
 
 ---
 
@@ -108,6 +139,18 @@ On scrape failures or bot/challenge detection, `utils/network_debug.py` writes J
 
 - `network_debug` (default `True`) — enable dumps on failures  
 - `network_debug_always` (default `False`) — dump on every page  
+
+Each dump’s `summary.challenge_classification` tags traffic as:
+
+| Tag | CapSolver? |
+|-----|------------|
+| `turnstile` | Yes (widget token) |
+| `recaptcha_v2` / `recaptcha_v3` / `recaptcha_enterprise` | Yes |
+| `hcaptcha` | Yes |
+| `managed_cf` | No — Cloudflare interstitial / challenge-platform without a solvable widget |
+| `akamai` / `datadome` / `perimeterx` | No |
+
+`capsolver_can_help` / `capsolver_note` summarize whether a token solver is worth trying.
 
 ---
 

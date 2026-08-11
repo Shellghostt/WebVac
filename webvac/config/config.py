@@ -34,8 +34,8 @@ DEFAULT_CONFIG = {
     # "latency" benchmarks all proxies at startup and always prefers the fastest.
     "proxy_strategy": "latency",
 
-    # Sticky sessions: how many requests to make on one proxy before voluntarily
-    # rotating. 0 = rotate on every request. Recommended: 10.
+    # Sticky sessions: successful requests on one proxy before voluntary rotate.
+    # 0 = disable voluntary rotate (stay on the same proxy). Recommended: 10.
     "sticky_requests": 10,
 
     # Cool-down queue: instead of immediately retiring a proxy that hits a 429

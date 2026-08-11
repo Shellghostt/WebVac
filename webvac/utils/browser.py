@@ -575,13 +575,22 @@ class BrowserManager:
         pinned_ua: Optional[str] = None,
         pinned_platform: Optional[str] = None,
         pinned_sec_ch_ua: Optional[str] = None,
+        pinned_city: Optional[str] = None,
+        pinned_lat: Optional[float] = None,
+        pinned_lon: Optional[float] = None,
+        pinned_timezone: Optional[str] = None,
     ) -> None:
         """Recreate one pool slot's context with a new proxy and pinned identity."""
         self._apply_identity(
             pinned_ua=pinned_ua,
             pinned_platform=pinned_platform,
             pinned_sec_ch_ua=pinned_sec_ch_ua,
+            pinned_city=pinned_city,
+            pinned_lat=pinned_lat,
+            pinned_lon=pinned_lon,
+            pinned_timezone=pinned_timezone,
         )
+        loc = self._session_location
         await self._recreate_slot(
             slot,
             proxy,
@@ -590,11 +599,15 @@ class BrowserManager:
                 ua=self._session_ua,
                 platform=self._session_platform,
                 sec_ch_ua=self._session_sec_ch_ua,
+                city=loc[0],
+                lat=loc[1],
+                lon=loc[2],
+                timezone=loc[3],
             ),
         )
         await self._reinject_auth_into_slot(slot)
         label = proxy["server"] if proxy else "direct (no proxy)"
-        print(f"[Browser] Slot {slot} rotated → {label}")
+        print(f"[Browser] Slot {slot} rotated → {label}  geo={loc[0]}")
 
     async def reconfigure_host_resolver(
         self,
@@ -873,6 +886,10 @@ class BrowserManager:
         pinned_ua: Optional[str] = None,
         pinned_platform: Optional[str] = None,
         pinned_sec_ch_ua: Optional[str] = None,
+        pinned_city: Optional[str] = None,
+        pinned_lat: Optional[float] = None,
+        pinned_lon: Optional[float] = None,
+        pinned_timezone: Optional[str] = None,
     ) -> None:
         self._session_ua = pinned_ua or self._pick_user_agent()
         if "mac" in self._session_ua.lower() or "macintosh" in self._session_ua.lower():
@@ -880,7 +897,16 @@ class BrowserManager:
         else:
             self._session_platform = pinned_platform or "Windows"
         self._session_sec_ch_ua = pinned_sec_ch_ua or self._sec_ch_ua_for_ua(self._session_ua)
-        self._session_location = self._pick_location()
+        # Prefer explicit geo pin (proxy identity) so UA/timezone/lat stay coherent
+        if pinned_timezone and pinned_lat is not None and pinned_lon is not None:
+            self._session_location = (
+                pinned_city or pinned_timezone,
+                float(pinned_lat),
+                float(pinned_lon),
+                pinned_timezone,
+            )
+        else:
+            self._session_location = self._pick_location()
         self._session_viewport = self._pick_viewport()
 
     @staticmethod
@@ -916,6 +942,10 @@ class BrowserManager:
             pinned_ua=identity.ua or None,
             pinned_platform=identity.platform,
             pinned_sec_ch_ua=identity.sec_ch_ua,
+            pinned_city=identity.city or None,
+            pinned_lat=identity.lat if identity.timezone else None,
+            pinned_lon=identity.lon if identity.timezone else None,
+            pinned_timezone=identity.timezone or None,
         )
         await bs.close()
         bs.identity = identity
@@ -940,6 +970,10 @@ class BrowserManager:
                     pinned_ua=ident.ua,
                     pinned_platform=ident.platform,
                     pinned_sec_ch_ua=ident.sec_ch_ua,
+                    pinned_city=ident.city or None,
+                    pinned_lat=ident.lat if ident.timezone else None,
+                    pinned_lon=ident.lon if ident.timezone else None,
+                    pinned_timezone=ident.timezone or None,
                 )
             else:
                 self._rotate_identity()

@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = []
+socks = ["aiohttp-socks"]
 
 [project.scripts]
 webvac = "webvac.cli.scraper:main"

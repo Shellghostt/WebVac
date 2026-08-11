@@ -828,18 +828,32 @@ def main():
             p_file = select_proxy_file()
             if p_file:
                 cmd_args += ["--proxy-file", p_file]
-                strategy = prompt_choice(
-                    "Proxy selection strategy",
-                    ["latency (Recommended)", "random", "round_robin"],
+                playbook = prompt_choice(
+                    "Proxy playbook",
+                    [
+                        "residential (sticky=25, UA+geo+tz pin) — Recommended for ISP proxies",
+                        "datacenter (sticky=5, round-robin)",
+                        "none (manual sticky / strategy)",
+                    ],
                     0,
                 )
-                strategy_val = "latency" if "latency" in strategy else strategy
-                cmd_args += ["--proxy-strategy", strategy_val]
-                sticky = prompt_string(
-                    "Sticky requests per proxy before rotate (0 = every request)", "10"
-                )
-                if sticky and sticky.isdigit():
-                    cmd_args += ["--sticky-requests", sticky]
+                if playbook.startswith("residential"):
+                    cmd_args += ["--proxy-playbook", "residential"]
+                elif playbook.startswith("datacenter"):
+                    cmd_args += ["--proxy-playbook", "datacenter"]
+                else:
+                    strategy = prompt_choice(
+                        "Proxy selection strategy",
+                        ["latency (Recommended)", "random", "round_robin"],
+                        0,
+                    )
+                    strategy_val = "latency" if "latency" in strategy else strategy
+                    cmd_args += ["--proxy-strategy", strategy_val]
+                    sticky = prompt_string(
+                        "Sticky requests per proxy before rotate (0 = disable voluntary rotate)", "10"
+                    )
+                    if sticky and sticky.isdigit():
+                        cmd_args += ["--sticky-requests", sticky]
 
         pipe = select_pipeline_file()
         if pipe:

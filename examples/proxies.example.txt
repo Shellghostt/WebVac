@@ -7,6 +7,11 @@
 #
 # Lines starting with # are ignored.
 # Copy this file to proxies.txt (gitignored) and edit with real proxies.
+#
+# Residential sticky tip (provider-side session pin):
+#   http://gate.provider.com:8000|user-session-abc123|secret
+# Pair with:  --proxy-playbook residential
+# (WebVac also pins UA + geo + timezone per proxy line for fingerprint consistency.)
 
 # Plain HTTP proxy
 http://1.2.3.4:8080
@@ -14,5 +19,9 @@ http://1.2.3.4:8080
 # Authenticated HTTP proxy
 http://5.6.7.8:3128|myuser|mypassword
 
-# SOCKS5 example
+# Residential sticky-session style username (vendor-specific)
+# http://gate.example.com:8000|customer-session-webvac01|secret
+
+# SOCKS5 example (startup bench needs: pip install aiohttp-socks)
+# Without it, SOCKS lines stay in the pool instead of being retired.
 # socks5://127.0.0.1:1080|user|pass

@@ -242,9 +242,7 @@ async def run_page_scrape(
             bot_detected = await crawler._after_goto(page, response)
 
             if bot_detected:
-                if crawler.proxy_manager and proxy_entry:
-                    crawler.proxy_manager.mark_failure(proxy_entry, transient=True)
-
+                # Do not mark_failure before stealth retry; rotate after evasion = one strike.
                 screenshot_path = None
                 if crawler.screenshot_module:
                     screenshot_path = await crawler.screenshot_module.capture_forced(
@@ -584,11 +582,11 @@ async def run_page_scrape(
                 f"[Crawler] Error on {url} "
                 f"(attempt {attempt + 1}/{crawler.max_retries + 1}): {exc}"
             )
-            exc_name = type(exc).__name__.lower()
-            if crawler.proxy_manager and (
-                "timeout" in exc_name or "timeout" in str(exc).lower()
-            ):
-                await crawler._rotate_proxy(transient=True, slot=slot)
+            from webvac.utils.proxy import classify_proxy_error
+
+            kind = classify_proxy_error(exc)
+            if crawler.proxy_manager and kind:
+                await crawler._rotate_proxy(transient=(kind == "transient"), slot=slot)
                 proxy_entry = crawler._proxy_for_slot(slot)
             if attempt < crawler.max_retries:
                 await asyncio.sleep(1.5 ** attempt)

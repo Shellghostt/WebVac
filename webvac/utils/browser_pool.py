@@ -12,7 +12,17 @@ class SlotIdentity:
     proxy: Optional[dict] = None
     ua: str = ""
     platform: str = "Windows"
-    sec_ch_ua: str = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+    sec_ch_ua: str = '"Chromium";v="133", "Google Chrome";v="133", "Not-A.Brand";v="99"'
+    # Geo pin — keep timezone aligned with lat/lon (and with residential IP when possible)
+    city: str = ""
+    lat: float = 0.0
+    lon: float = 0.0
+    timezone: str = ""
+
+    def location_tuple(self) -> Optional[tuple[str, float, float, str]]:
+        if self.timezone and self.lat and self.lon:
+            return (self.city or self.timezone, self.lat, self.lon, self.timezone)
+        return None
 
 
 @dataclass

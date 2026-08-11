@@ -243,6 +243,16 @@ def build_parser() -> argparse.ArgumentParser:
             "rotating to the next. 0 disables sticky sessions. (default: 10)"
         ),
     )
+    p.add_argument(
+        "--proxy-playbook",
+        choices=["none", "residential", "datacenter"],
+        default="none",
+        help=(
+            "Apply named proxy defaults: residential (sticky=25, long cooldown, "
+            "UA+geo+tz pinned per IP) or datacenter (sticky=5, round-robin). "
+            "Explicit --sticky-requests / --proxy-strategy / --cooldown-seconds win."
+        ),
+    )
 
     # Proxy cool-down
     p.add_argument(
@@ -418,19 +428,29 @@ def _proxy_to_identity(entry) -> SlotIdentity:
         ua=entry.pinned_ua or "",
         platform=entry.pinned_platform or "Windows",
         sec_ch_ua=entry.pinned_sec_ch_ua or _DEFAULT_SEC_CH_UA,
+        city=getattr(entry, "pinned_city", "") or "",
+        lat=float(getattr(entry, "pinned_lat", 0.0) or 0.0),
+        lon=float(getattr(entry, "pinned_lon", 0.0) or 0.0),
+        timezone=getattr(entry, "pinned_timezone", "") or "",
     )
 
 
 def _assign_slot_proxies(proxy_manager, concurrency: int, first_entry=None) -> list:
-    """Pick one proxy per concurrent worker slot."""
+    """Pick one proxy per concurrent worker slot (unique while the pool lasts)."""
     entries = []
+    assigned: list = []
     for i in range(concurrency):
         if i == 0 and first_entry:
-            entries.append(first_entry)
+            nxt = first_entry
         elif proxy_manager:
-            entries.append(proxy_manager.get_next())
+            nxt = proxy_manager.get_next(exclude=assigned, quiet=True)
+            if nxt is None and assigned:
+                nxt = assigned[i % len(assigned)]
         else:
-            entries.append(None)
+            nxt = None
+        entries.append(nxt)
+        if nxt is not None and nxt not in assigned:
+            assigned.append(nxt)
     return entries
 
 
@@ -564,6 +584,31 @@ async def run(args):
     print(f"  Formats     : {', '.join(output_formats)}")
     print(f"{'='*60}{Style.RESET_ALL}\n")
 
+    # ── Proxy playbook (sticky / cooldown / geo pin defaults) ─────────────────
+    from webvac.utils.proxy_playbook import apply_proxy_playbook
+
+    playbook = apply_proxy_playbook(
+        getattr(args, "proxy_playbook", "none") or "none",
+        sticky_requests=args.sticky_requests,
+        proxy_strategy=args.proxy_strategy,
+        proxy_cooldown_seconds=args.cooldown_seconds,
+        sticky_default=DEFAULT_CONFIG["sticky_requests"],
+        strategy_default=DEFAULT_CONFIG["proxy_strategy"],
+        cooldown_default=DEFAULT_CONFIG["proxy_cooldown_seconds"],
+    )
+    args.sticky_requests = playbook["sticky_requests"]
+    args.proxy_strategy = playbook["proxy_strategy"]
+    args.cooldown_seconds = playbook["proxy_cooldown_seconds"]
+    rotate_geolocation = bool(playbook.get("rotate_geolocation", True))
+    if playbook.get("playbook") and playbook["playbook"] != "none":
+        print(
+            f"{Fore.CYAN}[Proxy] Playbook={playbook['playbook']}  "
+            f"sticky={args.sticky_requests}  strategy={args.proxy_strategy}  "
+            f"cooldown={args.cooldown_seconds:.0f}s  "
+            f"geo_pin={'on' if playbook.get('pin_proxy_geo') else 'off'}"
+            f"{Style.RESET_ALL}"
+        )
+
     # ── robots.txt handler ───────────────────────────────────────────────────
     robots = None
     if not args.no_robots:
@@ -586,6 +631,7 @@ async def run(args):
                 max_failures=args.max_retries,
                 cooldown_seconds=args.cooldown_seconds,
                 max_cooldown_failures=DEFAULT_CONFIG["max_cooldown_failures"],
+                pin_geo=bool(playbook.get("pin_proxy_geo", True)),
             )
         except Exception as exc:
             print(f"{Fore.RED}[Error] Could not load proxy file: {exc}{Style.RESET_ALL}")
@@ -599,6 +645,7 @@ async def run(args):
                 max_failures=args.max_retries,
                 cooldown_seconds=args.cooldown_seconds,
                 max_cooldown_failures=DEFAULT_CONFIG["max_cooldown_failures"],
+                pin_geo=bool(playbook.get("pin_proxy_geo", True)),
             )
         except Exception as exc:
             print(f"{Fore.RED}[Error] Could not parse proxies: {exc}{Style.RESET_ALL}")
@@ -639,7 +686,7 @@ async def run(args):
     browser = BrowserManager(
         headless=not args.no_headless,
         rotate_user_agent=DEFAULT_CONFIG["rotate_user_agent"],
-        rotate_geolocation=DEFAULT_CONFIG["rotate_geolocation"],
+        rotate_geolocation=rotate_geolocation if proxy_manager else DEFAULT_CONFIG["rotate_geolocation"],
         rotate_viewport=DEFAULT_CONFIG["rotate_viewport"],
         humanize=not bool(getattr(args, "no_humanize", False)),
     )

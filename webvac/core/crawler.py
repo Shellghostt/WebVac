@@ -28,7 +28,7 @@ from webvac.utils.browser import BrowserManager
 from webvac.data.page_record import PageRecordBuilder
 from webvac.config.config import DEFAULT_CONFIG
 from webvac.utils.robots import RobotsHandler
-from webvac.utils.proxy import ProxyManager, ProxyEntry
+from webvac.utils.proxy import ProxyManager, ProxyEntry, SOLE_PROXY_WAIT_CAP_SEC
 from webvac.utils.screenshot import ScreenshotModule
 from webvac.utils.detection import wait_for_challenge_resolution
 from webvac.utils.browser_pool import SlotIdentity
@@ -145,7 +145,7 @@ class Crawler:
         return self._slot_proxies[slot % self.concurrency]
 
     def _build_slot_identities(self) -> list[SlotIdentity]:
-        default_sec = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+        default_sec = '"Chromium";v="133", "Google Chrome";v="133", "Not-A.Brand";v="99"'
         identities: list[SlotIdentity] = []
         for i in range(self.concurrency):
             entry = self._slot_proxies[i]
@@ -155,6 +155,10 @@ class Crawler:
                     ua=entry.pinned_ua or "",
                     platform=entry.pinned_platform or "Windows",
                     sec_ch_ua=entry.pinned_sec_ch_ua or default_sec,
+                    city=getattr(entry, "pinned_city", "") or "",
+                    lat=float(getattr(entry, "pinned_lat", 0.0) or 0.0),
+                    lon=float(getattr(entry, "pinned_lon", 0.0) or 0.0),
+                    timezone=getattr(entry, "pinned_timezone", "") or "",
                 ))
             else:
                 identities.append(SlotIdentity())
@@ -759,7 +763,28 @@ class Crawler:
                 self.proxy_manager.mark_failure(current, transient=transient)
                 self.proxy_manager.reset_request_count(current)
 
-            next_proxy = self.proxy_manager.get_next(exclude=current)
+            in_use_elsewhere = [
+                p for i, p in enumerate(self._slot_proxies)
+                if i != slot and p is not None
+            ]
+            exclude = ([current] if current else []) + in_use_elsewhere
+            next_proxy = self.proxy_manager.get_next(exclude=exclude)
+            if not next_proxy:
+                next_proxy = self.proxy_manager.get_next(
+                    exclude=current, reuse_cooling_if_only=True,
+                )
+                if next_proxy and next_proxy.is_on_cooldown():
+                    wait = min(
+                        max(0.0, next_proxy.cooldown_until - time.time()),
+                        SOLE_PROXY_WAIT_CAP_SEC,
+                    )
+                    if wait > 0:
+                        tqdm.write(
+                            f"[Proxy] No alternate — waiting {wait:.0f}s to reuse "
+                            f"{next_proxy.server}"
+                        )
+                        await asyncio.sleep(wait)
+                    next_proxy.cooldown_until = 0.0
 
             if not next_proxy:
                 tqdm.write("[Proxy]  ⚠  All proxies exhausted — no more proxies available.")
@@ -772,6 +797,10 @@ class Crawler:
                 pinned_ua=next_proxy.pinned_ua or None,
                 pinned_platform=next_proxy.pinned_platform or None,
                 pinned_sec_ch_ua=next_proxy.pinned_sec_ch_ua or None,
+                pinned_city=getattr(next_proxy, "pinned_city", None) or None,
+                pinned_lat=getattr(next_proxy, "pinned_lat", None) or None,
+                pinned_lon=getattr(next_proxy, "pinned_lon", None) or None,
+                pinned_timezone=getattr(next_proxy, "pinned_timezone", None) or None,
             )
             # Re-verify auth after forced rotate when authenticated
             if self.auth_manager and self.auth_manager.authenticated:
@@ -804,7 +833,12 @@ class Crawler:
             if current:
                 self.proxy_manager.reset_request_count(current)
 
-            next_proxy = self.proxy_manager.get_next(exclude=current)
+            in_use_elsewhere = [
+                p for i, p in enumerate(self._slot_proxies)
+                if i != slot and p is not None
+            ]
+            exclude = ([current] if current else []) + in_use_elsewhere
+            next_proxy = self.proxy_manager.get_next(exclude=exclude)
             if not next_proxy:
                 tqdm.write("[Proxy] [Sticky]  No alternative proxy for voluntary rotation.")
                 return
@@ -816,6 +850,10 @@ class Crawler:
                 pinned_ua=next_proxy.pinned_ua or None,
                 pinned_platform=next_proxy.pinned_platform or None,
                 pinned_sec_ch_ua=next_proxy.pinned_sec_ch_ua or None,
+                pinned_city=getattr(next_proxy, "pinned_city", None) or None,
+                pinned_lat=getattr(next_proxy, "pinned_lat", None) or None,
+                pinned_lon=getattr(next_proxy, "pinned_lon", None) or None,
+                pinned_timezone=getattr(next_proxy, "pinned_timezone", None) or None,
             )
             tqdm.write(
                 f"[Proxy] [Sticky]  Voluntarily rotated → {next_proxy.server}  "
