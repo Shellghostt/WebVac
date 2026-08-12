@@ -20,6 +20,7 @@ dependencies = [
   "jsbeautifier",
   "pyotp",
   "cryptography",
+  "capsolver>=1.0.7",
 ]
 
 [project.optional-dependencies]

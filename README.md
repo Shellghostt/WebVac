@@ -18,8 +18,9 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Auth walls (`/login`, `/ap/signin`, …) skipped separately from bot/WAF blocks
 - Human-like mouse/scroll/warmup on Patchright Chromium (`--no-humanize` to disable)
 - Network debug dumps on scrape failures (`scraped_data/_network_debug/`)
+- Optional CapSolver auto-CAPTCHA (reCAPTCHA / hCaptcha / Turnstile) with manual fallback
 - Logout URL deny and sticky proxy when authenticated
-- Optional VAPT/recon pipeline present in codebase (disabled by default)
+- Optional VAPT/recon via `--vapt` / `--profile` (collectors → analyzers → findings; default off)
 
 ## Project Structure
 
@@ -29,7 +30,8 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 - `webvac/cli/scraper.py`: Main CLI orchestrator (`python -m webvac`)
 - `webvac/core/`: BFS crawler, page scrape flow, pipelines, VAPT runner
 - `webvac/auth/`: AuthManager, sessions, MFA, auth-wall detection
-- `webvac/utils/`: Browser, proxies, robots, origin probe, screenshots, network debug
+- `webvac/captcha/`: CapSolver detect → extract → solve → inject (optional)
+- `webvac/utils/`: Browser, proxies, robots, origin probe, screenshots, network debug, humanize
 - `webvac/data/`: HTML parse, page records, storage/export
 - `webvac/collectors|analyzers|findings|active/`: Optional VAPT stack (default off)
 - `examples/`: Input templates (auth, proxies, session, pipeline) — see [`examples/README.md`](examples/README.md)
@@ -150,7 +152,7 @@ python -m webvac --url https://example.com --mode crawl --depth 3 --max-pages 50
 - `--pause-for-consent`: Headed wait-for-ENTER after first page per host (use with `--no-headless`)
 - `--no-consent-dismiss`: Disable automatic cookie/CMP Accept clicks on scraped pages
 
-Known-site CMP URL bypasses (applied automatically when the host matches): e.g. Deloitte gets `?hidebanner=true`. Google/YouTube get a `CONSENT=YES+` cookie before navigation. Not applied to unknown sites.
+Known-site CMP URL bypasses (host-allowlisted): Deloitte `?hidebanner=true` (multi-TLD). Consent cookies before navigation: Google/YouTube `CONSENT=YES+` (broad TLD list), Bing/MSN `ENFORCE_PRIVACY`, Yahoo `GUCS`, DuckDuckGo preference cookie. Auto-dismiss also covers OneTrust, Cookiebot, Didomi, Osano, Sourcepoint, Quantcast, Usercentrics, Funding Choices. Not applied to unknown hosts.
 Honeypot links (`display:none`, `visibility:hidden`, common hidden classes) are skipped when discovering crawl links.
 
 Env vars: `WEBVAC_USER`, `WEBVAC_PASS`, optional `WEBVAC_SESSION_KEY` (Fernet-encrypt session files).
@@ -178,9 +180,33 @@ python -m webvac --url https://example.com/dashboard --mode single \
 - `--proxy-file FILE`: One proxy per line
 - `--proxies "..."`: Comma-separated proxy list
 - `--proxy-strategy latency|random|round_robin`
-- `--sticky-requests N`: Requests before voluntary rotate
+- `--proxy-playbook none|residential|datacenter`: Named sticky/cooldown/geo defaults (residential = sticky 25 + UA/geo/tz pin)
+- `--sticky-requests N`: Successful requests before voluntary rotate (`0` = stay on the same proxy)
 - `--cooldown-seconds SECS`: Cooldown after 429/timeout
+
+Residential example:
+
+```bash
+python -m webvac --url https://example.com --mode crawl \
+  --proxy-file proxies.txt --proxy-playbook residential
+```
+
+Each proxy line gets a locked UA + matching US city geolocation/timezone. Use provider session usernames for ISP sticky IPs (see `examples/proxies.example.txt`).
 - `--no-health-check`: Skip startup benchmark
+
+### VAPT / recon (optional)
+
+Default scrape is unchanged. Enable the collectors → analyzers → findings pipeline with:
+
+- `--vapt`: Enable with `standard` profile
+- `--profile quick|standard|deep|bugbounty`: Named collector/analyzer bundle (implies VAPT)
+- `--active-recon`: Out-of-band probes (interesting files, GraphQL, OPTIONS); implies VAPT
+
+```bash
+python -m webvac --url https://example.com --mode crawl --profile standard
+```
+
+Recon JSON/HTML lands under the scan directory alongside scrape output. See [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md).
 
 ### Origin bypass (manual IP)
 
@@ -198,6 +224,29 @@ Listeners attach on every dynamic page load (document, script, xhr/fetch/websock
 - `--network-debug-always`: Also dump on successful pages
 
 Auth/login URLs (`/ap/signin`, `/login`, `/register`, …) are classified as `auth_wall` and skipped — they do **not** trigger bot retries or proxy rotation. Reports show them under “Auth Walls Skipped”.
+
+### Auto CAPTCHA (CapSolver)
+
+When a bot/CAPTCHA page is detected, WebVac can call [CapSolver](https://www.capsolver.com/) to solve reCAPTCHA v2/v3, hCaptcha, or Cloudflare Turnstile, then inject the token into the page. Manual headed prompt remains the fallback.
+
+```bash
+# Recommended: gitignored key file (copy examples/capsolver.example.key → capsolver.key)
+python -m webvac --url https://example.com --mode single --captcha-solver capsolver
+
+# or via environment
+set CAPSOLVER_API_KEY=YOUR_KEY
+python -m webvac --url https://example.com --captcha-solver capsolver
+
+# or one-off flag (ends up in shell history)
+python -m webvac --url https://example.com --mode single \
+  --captcha-solver capsolver --captcha-api-key YOUR_KEY
+```
+
+- Key file: repo-root `capsolver.key` (gitignored) or `.env` with `CAPSOLVER_API_KEY=`
+- `--captcha-solver none|capsolver` (`none` disables even if a key file exists)
+- `--captcha-api-key KEY` (or `CAPSOLVER_API_KEY` / `WEBVAC_CAPSOLVER_KEY`)
+- `--captcha-timeout SECS` (default 120)
+- `--no-captcha-prompt`: disable manual fallback after auto-solve fails
 
 ## Proxy File Format
 

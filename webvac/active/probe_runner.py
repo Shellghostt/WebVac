@@ -8,6 +8,7 @@ from typing import Any, Optional
 import aiohttp
 
 from webvac.active.graphql_probe import probe_graphql
+from webvac.active.http_methods import probe_http_methods
 from webvac.active.interesting_files import probe_interesting_files
 from webvac.intelligence.store import IntelligenceStore
 from webvac.models.findings import ProbeResult
@@ -41,6 +42,15 @@ class ProbeRunner:
             )
             results.extend(file_results)
             self.logger.info("interesting_files: %d hits", len(file_results))
+
+            method_results = await probe_http_methods(
+                base_url,
+                self.config,
+                session=session,
+                intelligence=intelligence,
+            )
+            results.extend(method_results)
+            self.logger.info("http_methods: %d hits", len(method_results))
 
         graphql_results = await probe_graphql(base_url, self.config, intelligence)
         results.extend(graphql_results)

@@ -23,6 +23,16 @@ DEFAULT_CONFIG = {
     # CAPTCHA manual prompt timeout (seconds); 0 = wait forever
     "captcha_prompt_timeout_sec": 300,
 
+    # Auto CAPTCHA solver (CapSolver). Set captcha_solver=capsolver + API key.
+    "captcha_solver": "none",          # none | capsolver
+    "captcha_api_key": "",             # or env CAPSOLVER_API_KEY / WEBVAC_CAPSOLVER_KEY
+    "captcha_api_base": "https://api.capsolver.com",
+    "captcha_solver_timeout_sec": 120,
+    "captcha_poll_interval_sec": 2.0,
+    "captcha_solver_retries": 2,
+    "captcha_use_proxy": False,
+    "captcha_fallback_manual": True,
+
     # Politeness delays (seconds)
     "delay_min": 1.0,
     "delay_max": 3.0,
@@ -125,6 +135,7 @@ DEFAULT_CONFIG = {
         "graphql": False,
         "oauth": False,
         "cloud": False,
+        "html": False,
     },
     "active_recon": False,
     "active_probes": {
@@ -133,6 +144,7 @@ DEFAULT_CONFIG = {
         "swagger": False,
         "git": False,
         "env": False,
+        "http_methods": False,
     },
     "active_probe_concurrency": 5,
     "active_probe_delay": 0.3,

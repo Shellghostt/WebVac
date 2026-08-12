@@ -9,10 +9,10 @@ import os
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from webvac.auth.auth import AuthHandler, CAPTCHA_SELECTORS
+from webvac.auth.auth import AuthHandler, CAPTCHA_WIDGET_SELECTORS
 from webvac.auth.cookie_audit import audit_cookies, print_audit_warnings
 from webvac.auth.credentials import resolve_credentials
-from webvac.auth.mfa import generate_totp, prompt_manual_challenge, prompt_otp
+
 from webvac.auth.profile import AuthProfile, load_auth_profile, merge_cli_into_profile
 from webvac.auth.session_store import (
     cookies_from_state,
@@ -182,48 +182,14 @@ class AuthManager:
             return await self.login(seed_url=seed_url)
         return False
 
-    async def bootstrap_manual(self, *, url: str, session_file: str) -> bool:
-        """
-        Open a visible browser for manual OAuth/SSO login, then export storage_state.
-        """
-        if not session_file:
-            print("[Auth] --session-file is required for --auth-bootstrap.")
-            return False
-        was_headless = self.headless
-        # Bootstrap always visible
-        page = None
-        try:
-            # If browser is headless, user should pass --no-headless; we still prompt.
-            page = await self.browser.new_page(slot=0)
-            print(f"[Auth/Bootstrap] Opening {url}")
-            print("[Auth/Bootstrap] Complete login / OAuth in the browser window.")
-            await page.goto(url, wait_until=self.wait_until, timeout=self.timeout)
-            ok = await prompt_manual_challenge(
-                message="When you are fully logged in, press ENTER to export the session.",
-            )
-            if not ok:
-                return False
-            await asyncio.sleep(0.5)
-            await self._persist_and_broadcast(seed_url=url, session_override=session_file)
-            self._authenticated = True
-            if self.profile.auth_check_url:
-                return await self.verify(self.profile.auth_check_url)
-            return True
-        except Exception as exc:
-            print(f"[Auth/Bootstrap] Failed: {exc}")
-            return False
-        finally:
-            if page:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-            self.headless = was_headless
-
     async def _login_patchright(self, login_url: str) -> bool:
         page = await self.browser.new_page(slot=0)
+        ok = False
+        paused = False
         try:
+            print(f"[Auth] Opening login page: {login_url}")
             await page.goto(login_url, wait_until=self.wait_until, timeout=self.timeout)
+            await asyncio.sleep(0.5)
             await dismiss_popups_patchright(
                 page,
                 extra_selectors=self.profile.dismiss_selectors or None,
@@ -241,20 +207,21 @@ class AuthManager:
                     self.profile.steps,
                     username=self.profile.username,
                     password=self.profile.password,
-                    totp_secret=self.profile.totp_secret,
-                    otp_prompt=self.profile.otp_prompt,
                     dismiss_selectors=self.profile.dismiss_selectors,
                     timeout_ms=self.timeout,
                 )
                 if not ok:
+                    paused = await self._pause_on_failure(page, "multi-step login failed")
                     return False
                 await asyncio.sleep(1.0)
-                # Handle post-step MFA/CAPTCHA
-                if await self._handle_mfa_challenge(page):
+                if await self._handle_post_login_captcha(page):
                     await asyncio.sleep(0.5)
-                return not await self.is_auth_wall(page)
+                ok = not await self.is_auth_wall(page)
+                if not ok:
+                    paused = await self._pause_on_failure(page, "still on auth wall after steps")
+                return ok
 
-            # Standard single-form login
+            # Standard single-form login (already on page — do not navigate again)
             if self.profile.username_selector and self.profile.password_selector:
                 ok = await self._handler.login_with_selectors(
                     page,
@@ -266,10 +233,9 @@ class AuthManager:
                     self.profile.submit_selector,
                     timeout=self.timeout,
                     wait_until=self.wait_until,
+                    already_on_page=True,
                 )
             else:
-                # Already navigated — use fill helpers via login() which navigates again
-                # Prefer in-place fill to avoid double navigation:
                 ok = await self._handler.login(
                     page,
                     login_url,
@@ -277,73 +243,150 @@ class AuthManager:
                     self.profile.password,
                     timeout=self.timeout,
                     wait_until=self.wait_until,
+                    already_on_page=True,
                 )
 
             if not ok:
-                # Maybe MFA challenge appeared
-                if await self._handle_mfa_challenge(page):
+                # Headed manual solve: user may finish login while CapSolver/submit races
+                try:
+                    if not await self.is_auth_wall(page):
+                        print(
+                            f"[Auth] Left login page during login attempt — "
+                            f"treating as success ({getattr(page, 'url', '')})."
+                        )
+                        return True
+                except Exception:
+                    pass
+                if await self._handle_post_login_captcha(page):
                     await asyncio.sleep(1.0)
-                    return not await self.is_auth_wall(page)
+                    ok = not await self.is_auth_wall(page)
+                    if ok:
+                        return True
+                paused = await self._pause_on_failure(page, "credential fill/submit failed")
                 return False
 
-            if await self._handle_mfa_challenge(page):
+            if await self._handle_post_login_captcha(page):
                 await asyncio.sleep(0.5)
             return True
+        except Exception as exc:
+            print(f"[Auth] Login error: {exc}")
+            paused = await self._pause_on_failure(page, str(exc))
+            return False
         finally:
+            # Headed failures pause for ENTER first; headless closes immediately.
             try:
                 await page.close()
             except Exception:
                 pass
 
-    async def _handle_mfa_challenge(self, page) -> bool:
-        """If CAPTCHA/OTP visible, try TOTP / prompt. Returns True if handled."""
-        # OTP field?
-        otp_selectors = [
-            'input[name="otp"]',
-            'input[name="totp"]',
-            'input[name="mfa"]',
-            'input[name="two_factor"]',
-            'input[autocomplete="one-time-code"]',
-        ]
-        for sel in otp_selectors:
-            try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=400):
-                    code = None
-                    if self.profile.totp_secret:
-                        code = generate_totp(self.profile.totp_secret)
-                        print("[Auth/MFA] Filled TOTP automatically.")
-                    elif self.profile.otp_prompt or not self.headless:
-                        code = await prompt_otp()
-                    if code:
-                        await loc.fill(code)
-                        # try submit
-                        try:
-                            await page.keyboard.press("Enter")
-                        except Exception:
-                            pass
-                        await asyncio.sleep(1.0)
-                        return True
-            except Exception:
-                continue
-
-        # CAPTCHA iframe?
-        for sel in CAPTCHA_SELECTORS:
-            try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=300):
-                    if self.headless:
-                        print(
-                            "[Auth/MFA] CAPTCHA detected in headless mode. "
-                            "Re-run with --no-headless or --auth-bootstrap."
-                        )
-                        return False
-                    return await prompt_manual_challenge(
-                        message="CAPTCHA/challenge detected — solve it in the browser, then press ENTER.",
-                    )
-            except Exception:
-                continue
+    async def _pause_on_failure(self, page, reason: str) -> bool:
+        """Log failure details."""
+        url = ""
+        try:
+            url = getattr(page, "url", "") or ""
+        except Exception:
+            pass
+        print(f"[Auth] Login unsuccessful ({reason}). Current URL: {url or '(unknown)'}")
+        if self.headless:
+            print("[Auth] Tip: re-run with --no-headless to debug the login form.")
         return False
+
+    async def _handle_post_login_captcha(self, page) -> bool:
+        """If a CAPTCHA is present after login submit, try CapSolver then re-submit."""
+        from webvac.captcha.detect import detect_captcha_raw
+
+        raw = await detect_captcha_raw(page)
+        if not raw:
+            present = False
+            for sel in CAPTCHA_WIDGET_SELECTORS:
+                try:
+                    if await page.locator(sel).count() > 0:
+                        present = True
+                        break
+                except Exception:
+                    continue
+            if not present:
+                return False
+        return await self._try_capsolver_on_page(page)
+
+    async def _try_capsolver_on_page(self, page) -> bool:
+        """Attempt CapSolver auto-solve on a login/auth page CAPTCHA."""
+        try:
+            from webvac.captcha import solver_from_config
+            from webvac.captcha.config import CaptchaSolverConfig
+            from webvac.auth.auth import SUBMIT_SELECTORS
+
+            cfg = CaptchaSolverConfig.from_mapping()
+            if not cfg.api_key or not cfg.enabled:
+                print("[Auth/Captcha] No CapSolver API key configured — cannot auto-solve login CAPTCHA.")
+                return False
+
+            mgr = solver_from_config()
+            url = getattr(page, "url", "") or ""
+            ua = ""
+            try:
+                ua = await page.evaluate("navigator.userAgent") or ""
+            except Exception:
+                pass
+
+            print(f"[Auth/Captcha] CAPTCHA detected on login page — attempting CapSolver auto-solve...")
+            result = await mgr.try_solve_on_page(page, url=url, user_agent=ua)
+            if not result.success:
+                print(f"[Auth/Captcha] Auto-solve failed: {result.error}")
+                return False
+
+            # Form-embedded Turnstile: re-submit without reload (reload wipes credentials)
+            needs_reload = getattr(result, "_needs_reload", False)
+            if needs_reload:
+                await asyncio.sleep(1.0)
+                try:
+                    await page.reload(wait_until=self.wait_until, timeout=self.timeout)
+                except Exception:
+                    pass
+                await asyncio.sleep(1.0)
+            else:
+                try:
+                    await self._handler._sync_hidden_credential_fields(page)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+                clicked = False
+                for sel in SUBMIT_SELECTORS:
+                    try:
+                        loc = page.locator(sel).first
+                        if await loc.is_visible(timeout=500):
+                            await loc.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if not clicked:
+                    try:
+                        await page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+                await asyncio.sleep(1.2)
+                # Bypass client-side Turnstile gates (chess.com ND flag)
+                try:
+                    if await self._handler._force_native_form_submit(page):
+                        print("[Auth/Captcha] Forced native form submit after token inject.")
+                        await asyncio.sleep(1.5)
+                except Exception:
+                    pass
+                try:
+                    await page.wait_for_load_state(self.wait_until, timeout=self.timeout)
+                except Exception:
+                    pass
+
+            still_wall = await self.is_auth_wall(page)
+            if still_wall:
+                print("[Auth/Captcha] Token injected but still on auth wall.")
+                return False
+            print("[Auth/Captcha] CapSolver auto-solve succeeded on login page.")
+            return True
+        except Exception as exc:
+            print(f"[Auth/Captcha] Auto-solve error: {exc}")
+            return False
 
     async def _persist_and_broadcast(
         self,

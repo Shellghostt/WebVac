@@ -47,10 +47,23 @@ class TestConsentCookies(unittest.TestCase):
         self.assertTrue(any(c["name"] == "CONSENT" and c["value"] == "YES+" for c in cookies))
         self.assertTrue(any(c["domain"] == ".google.com" for c in cookies))
 
+    def test_google_tld_and_bing(self):
+        from webvac.utils.consent import known_consent_cookies_for_url
+
+        es = known_consent_cookies_for_url("https://www.google.es/")
+        self.assertTrue(any(c["domain"] == ".google.es" for c in es))
+        bing = known_consent_cookies_for_url("https://www.bing.com/")
+        self.assertTrue(any(c["name"] == "ENFORCE_PRIVACY" for c in bing))
+
     def test_non_google_no_cookie(self):
         from webvac.utils.consent import known_consent_cookies_for_url
 
         self.assertEqual(known_consent_cookies_for_url("https://example.com/"), [])
+
+    def test_deloitte_uk_bypass(self):
+        url, note = apply_known_consent_bypass("https://www.deloitte.co.uk/")
+        self.assertIn("hidebanner=true", url)
+        self.assertIsNotNone(note)
 
 
 class TestHoneypotLinks(unittest.TestCase):

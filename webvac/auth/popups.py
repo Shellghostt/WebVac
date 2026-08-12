@@ -11,12 +11,24 @@ from typing import Optional
 # Common CMP / cookie-banner Accept buttons
 COOKIE_ACCEPT_SELECTORS = [
     "#onetrust-accept-btn-handler",
+    "#accept-recommended-btn-handler",  # OneTrust "Accept Recommended"
     "#accept-cookie",
     "#acceptCookies",
     "#cookie-accept",
     "#cookies-accept",
     "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
     "#CybotCookiebotDialogBodyButtonAccept",
+    "#didomi-notice-agree-button",
+    "#didomi-notice-agree-button *",
+    "#truste-consent-button",
+    "#consent_prompt_submit",
+    "#cookieAcceptBtn",
+    "#L2AGLb",  # Google EU "Accept all"
+    "#tarteaucitronAllAllowed",
+    ".osano-cm-accept-all",
+    ".osano-cm-button--type_accept",
+    ".sp_choice_type_11",  # Sourcepoint Accept all
+    ".fc-cta-consent",  # Google Funding Choices
     ".cc-btn.cc-dismiss",
     ".cc-allow",
     ".cc-accept",
@@ -25,14 +37,18 @@ COOKIE_ACCEPT_SELECTORS = [
     ".cookies-accept",
     ".accept-cookies",
     ".accept-all-cookies",
+    ".js-accept-cookies",
     "[data-testid='cookie-policy-dialog-accept-button']",
-    "[data-testid='uc-accept-all-button']",
+    "[data-testid='uc-accept-all-button']",  # Usercentrics
+    "#qc-cmp2-ui button[mode='primary']",  # Quantcast Choice
+    ".qc-cmp2-summary-buttons button[mode='primary']",
     "[aria-label*='Accept all' i]",
     "[aria-label*='Accept cookies' i]",
     "button[id*='accept' i][id*='cookie' i]",
     "button[class*='accept' i][class*='cookie' i]",
     "button[id*='onetrust' i]",
     "button[class*='onetrust' i][class*='accept' i]",
+    "button[data-action='consent'][data-action-type='accept']",
 ]
 
 # Privacy / terms / policy modal Accept / Agree / Continue buttons
@@ -53,10 +69,14 @@ ACCEPT_TEXT_LABELS = [
     "Accept All Optional Cookies",
     "Accept all cookies",
     "Accept All Cookies",
+    "Accept recommended",
+    "Accept Recommended",
     "Accept all",
     "Accept All",
     "Accept cookies",
     "Accept Cookies",
+    "Allow all cookies",
+    "Allow All Cookies",
     "I accept",
     "I Accept",
     "I agree",
@@ -67,6 +87,11 @@ ACCEPT_TEXT_LABELS = [
     "Allow all",
     "Allow All",
     "Allow cookies",
+    "Tout accepter",
+    "Alles akzeptieren",
+    "Aceptar todo",
+    "Accetta tutto",
+    "Alles toestaan",
     "Got it",
     "Got It",
     "OK, got it",

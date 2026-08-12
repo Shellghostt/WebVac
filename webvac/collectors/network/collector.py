@@ -19,6 +19,8 @@ _SCRAPE_TYPES = frozenset({
     "xhr", "fetch", "websocket", "eventsource", "document", "script",
 })
 _BODY_PREVIEW_LIMIT = 4096
+_WS_MSG_LIMIT = 40
+_WS_PAYLOAD_LIMIT = 2000
 
 
 @dataclass
@@ -32,10 +34,17 @@ class _PendingRequest:
 
 
 @dataclass
+class _WsSession:
+    url: str
+    messages: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass
 class _NetworkBuffer:
     pending: dict[Any, _PendingRequest] = field(default_factory=dict)
     artifacts: list[NetworkRequestArtifact] = field(default_factory=list)
     page_url: str = ""
+    websockets: dict[Any, _WsSession] = field(default_factory=dict)
 
 
 class NetworkCollector(BaseCollector):
@@ -64,9 +73,66 @@ class NetworkCollector(BaseCollector):
         page.on("response", lambda resp: asyncio.create_task(self._on_response(resp)))
         page.on("requestfailed", self._on_request_failed)
         page.on("requestfinished", lambda req: asyncio.create_task(self._on_finished(req)))
+        try:
+            page.on("websocket", self._on_websocket)
+        except Exception:
+            pass
 
     def _want_type(self, rtype: str) -> bool:
         return rtype in self._types
+
+    def _on_websocket(self, ws) -> None:
+        if not self._buffer or "websocket" not in self._types:
+            return
+        url = getattr(ws, "url", "") or ""
+        session = _WsSession(url=url)
+        self._buffer.websockets[ws] = session
+
+        def _clip(payload: Any) -> str:
+            if payload is None:
+                return ""
+            if isinstance(payload, (bytes, bytearray)):
+                try:
+                    text = payload.decode("utf-8", errors="replace")
+                except Exception:
+                    text = repr(payload)[:_WS_PAYLOAD_LIMIT]
+            else:
+                text = str(payload)
+            return text[:_WS_PAYLOAD_LIMIT]
+
+        def _add(direction: str, payload: Any) -> None:
+            if len(session.messages) >= _WS_MSG_LIMIT:
+                return
+            session.messages.append({"direction": direction, "data": _clip(payload)})
+
+        try:
+            ws.on("framesent", lambda payload: _add("sent", payload))
+            ws.on("framereceived", lambda payload: _add("recv", payload))
+            ws.on("close", lambda: self._flush_websocket(ws))
+        except Exception:
+            self._flush_websocket(ws)
+
+    def _flush_websocket(self, ws) -> None:
+        if not self._buffer:
+            return
+        session = self._buffer.websockets.pop(ws, None)
+        if not session:
+            return
+        page_url = self._buffer.page_url or (self._page.url if self._page else session.url)
+        self._buffer.artifacts.append(
+            NetworkRequestArtifact(
+                page_url=page_url,
+                request_url=session.url,
+                method="GET",
+                resource_type="websocket",
+                request_headers={},
+                status=101 if session.messages else 0,
+                response_headers={},
+                content_type="websocket",
+                body_preview=f"{len(session.messages)} frame(s)",
+                websocket_messages=tuple(session.messages),
+            )
+        )
 
     def _on_request(self, request) -> None:
         if not self._buffer:
@@ -140,7 +206,6 @@ class NetworkCollector(BaseCollector):
         pending = self._buffer.pending.get(request)
         status = response.status
         rtype = request.resource_type
-        # In scrape-debug, also keep any failed resource even if type filtered
         if not pending:
             if not (self._want_type(rtype) or (self.scrape_debug and status >= 400)):
                 return
@@ -193,6 +258,9 @@ class NetworkCollector(BaseCollector):
             return []
         if page and not self._buffer.page_url:
             self._buffer.page_url = page.url
+        # Flush any open websocket sessions still buffered
+        for ws in list(self._buffer.websockets.keys()):
+            self._flush_websocket(ws)
         await asyncio.sleep(0.25)
         return list(self._buffer.artifacts)
 
@@ -200,6 +268,8 @@ class NetworkCollector(BaseCollector):
         """Return serializable entries for scrape debug dumps."""
         if not self._buffer:
             return []
+        for ws in list(self._buffer.websockets.keys()):
+            self._flush_websocket(ws)
         await asyncio.sleep(0.2)
         return [a.to_dict() for a in self._buffer.artifacts]
 

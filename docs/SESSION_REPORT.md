@@ -66,7 +66,7 @@ This release packages WebVac as an installable `webvac/` module, removes Nodrive
 ### Critical
 | Gap | Impact |
 |-----|--------|
-| VAPT stack unwired | Collectors/analyzers/findings exist; `PipelineRunner` not called from CLI |
+| VAPT stack | Wired via `--vapt` / `--profile`; default OFF |
 | No MCP / job API | No start/status/cancel/result for remote BAS |
 | Headless-safe auth incomplete | OTP, CAPTCHA, bootstrap, pause-for-consent still need a human |
 

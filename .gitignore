@@ -40,6 +40,7 @@ screenshots/
 auth_creds.json
 sessions/
 proxies.txt
+capsolver.key
 .env.*
 !.env.example
 

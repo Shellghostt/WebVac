@@ -44,6 +44,17 @@ from webvac.models.origin import OriginTarget
 from webvac.graph.endpoint_graph import EndpointGraph
 
 
+def _aiohttp_proxy_args(proxy_entry) -> tuple[Optional[str], Optional[aiohttp.BasicAuth]]:
+    """Build ``(proxy_url, proxy_auth)`` from a ProxyEntry for aiohttp requests."""
+    if proxy_entry is None:
+        return None, None
+    server = proxy_entry.server
+    auth = None
+    if proxy_entry.username:
+        auth = aiohttp.BasicAuth(proxy_entry.username, proxy_entry.password or "")
+    return server, auth
+
+
 class Crawler:
 
     def __init__(
@@ -205,6 +216,10 @@ class Crawler:
 
         if self.robots and not self.robots.is_allowed(url):
             tqdm.write(f"[Crawler] Blocked by robots.txt -> {url}")
+            tqdm.write(
+                "[Crawler] Tip: re-run with --no-robots if you have permission "
+                "to scrape this site (browser will not load blocked URLs)."
+            )
             data = self._create_failed_page(url, "Blocked by robots.txt")
             return [data]
 
@@ -316,6 +331,11 @@ class Crawler:
 
                     if self.robots and not self.robots.is_allowed(url):
                         tqdm.write(f"[Crawler] Blocked by robots.txt -> {url}")
+                        if url.rstrip("/") == (start_url or "").rstrip("/"):
+                            tqdm.write(
+                                "[Crawler] Tip: seed URL blocked — browser will not load pages. "
+                                "Re-run with --no-robots if you have permission to scrape."
+                            )
                         visited.add(url)
                         failed_data = self._create_failed_page(url, "Blocked by robots.txt")
                         results.append(failed_data)
@@ -631,7 +651,7 @@ class Crawler:
             url = rewritten
 
         proxy_entry = self._proxy_for_slot(slot)
-        proxy = proxy_entry.server if proxy_entry else None
+        proxy_url, proxy_auth = _aiohttp_proxy_args(proxy_entry)
 
         if self._origin:
             from webvac.utils.origin_probe import fetch_via_origin
@@ -640,7 +660,7 @@ class Crawler:
                     self._origin,
                     url,
                     timeout_sec=self.timeout / 1000.0,
-                    proxy=proxy,
+                    proxy=proxy_url,
                     user_agent=DEFAULT_CONFIG.get("user_agent", ""),
                 )
                 if status in (403, 401, 503):
@@ -660,7 +680,7 @@ class Crawler:
 
         try:
             session = await self._ensure_http_session()
-            async with session.get(url, proxy=proxy) as response:
+            async with session.get(url, proxy=proxy_url, proxy_auth=proxy_auth) as response:
                 status = response.status
                 if status in (403, 401, 503):
                     return {"status": "bot_blocked"}

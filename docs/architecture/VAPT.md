@@ -1,9 +1,9 @@
 # VAPT / Recon Pipeline Architecture
 
 **Parent:** [Full System Architecture](../ARCHITECTURE.md)  
-**Status:** Implemented in codebase · **default OFF** (`vapt_enabled: False`) · **`PipelineRunner` not wired into CLI scrape path yet**
+**Status:** Implemented · **default OFF** (`vapt_enabled: False`) · enable with `--vapt` or `--profile {quick,standard,deep,bugbounty}`
 
-**Code:** `collectors/`, `analyzers/`, `findings/`, `active/`, `intelligence/`, `graph/`, `core/runner.py`, `config/scan_profiles.py`
+**Code:** `collectors/`, `analyzers/`, `findings/`, `active/`, `intelligence/`, `graph/`, `core/runner.py`, `config/scan_profiles.py`, CLI in `cli/scraper.py`
 
 ---
 
@@ -84,6 +84,7 @@ flowchart TB
   Ctx --> G[graphql]
   Ctx --> O[oauth]
   Ctx --> CL[cloud]
+  Ctx --> HTML[html]
   H --> Intel[IntelligenceItem list]
   C --> Intel
   A --> Intel
@@ -95,7 +96,10 @@ flowchart TB
   G --> Intel
   O --> Intel
   CL --> Intel
+  HTML --> Intel
 ```
+
+**HTML analyzer:** forms, hidden inputs, file uploads, interesting comments, admin/auth links.
 
 **Auth analyzer note:** default-credential panel fingerprints always available when auth analyzer enabled; **cookie-flag findings** additionally require `vapt_enabled` (scrape-safe login warnings live in `auth/cookie_audit.py` instead).
 
@@ -112,8 +116,10 @@ flowchart TD
   AR{active_recon?} -->|yes| PR[ProbeRunner]
   PR --> IF[interesting_files]
   PR --> GQ[graphql_probe]
+  PR --> HM[http_methods OPTIONS]
   IF --> ProbeRes[ProbeResult]
   GQ --> ProbeRes
+  HM --> ProbeRes
   ProbeRes --> FE
 ```
 
@@ -127,28 +133,29 @@ Rules modules under `findings/rules/`: header, secret, cookie, storage, network,
 
 `config/scan_profiles.py` presets: `quick`, `standard`, `deep`, `bugbounty`.
 
-Each profile toggles collectors/analyzers/active flags. Intended use:
-
-```python
-PipelineRunner.from_profile("standard", ...)
+```bash
+python -m webvac --url https://example.com --mode crawl --profile standard
+python -m webvac --url https://example.com --mode single --vapt
+python -m webvac --url https://example.com --mode crawl --profile deep   # includes active recon
+python -m webvac --url https://example.com --mode crawl --vapt --active-recon
 ```
 
-There is **no `--profile` CLI flag on scraper yet** — wiring is a future task.
+`--profile` / `--active-recon` imply VAPT. Default scrape path stays unchanged without these flags.
 
 ---
 
-## 7. Intended vs current scrape path
+## 7. Scrape path with optional VAPT
 
 ```mermaid
 flowchart TB
-  subgraph today [Today — default]
+  subgraph today [Default scrape]
     A[scraper.run] --> B[Crawler HTML parse]
     B --> C[Storage scrape/]
   end
 
-  subgraph future [When VAPT wired]
+  subgraph vapt [With --vapt / --profile]
     A2[scraper.run] --> B2[Crawler + collectors]
-    B2 --> R[PipelineRunner]
+    B2 --> R[PipelineRunner.run_analysis]
     R --> D[Storage scrape/ + recon/ + artifacts/]
   end
 ```
@@ -156,9 +163,10 @@ flowchart TB
 | Concern | Today |
 |---------|-------|
 | `vapt_enabled` default | `False` |
-| Collectors during crawl | Only if flag flipped in config |
-| `PipelineRunner` after crawl | Not called from `scraper.run` |
-| Recon HTML/JSON reports | Writer exists (`data/recon_report.py`) |
+| Enable | `--vapt`, `--profile`, or `--active-recon` |
+| Collectors during crawl | When `vapt_enabled` |
+| `PipelineRunner` after crawl | Called from `cli/scraper.py` |
+| Recon HTML/JSON reports | Via `Storage.save(..., recon=)` |
 
 ---
 

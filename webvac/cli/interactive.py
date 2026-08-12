@@ -253,7 +253,6 @@ class AuthConfig:
     auth_check_url: Optional[str] = None
     on_auth_wall: Optional[str] = None  # abort | skip | relogin
     session_ttl: Optional[int] = None
-    otp_prompt: bool = False
     auth_profile_path: Optional[str] = None
 
 
@@ -311,7 +310,6 @@ def _load_auth_from_json(path: str) -> AuthConfig:
         auth_check_url=data.get("auth_check_url") or data.get("check_url"),
         on_auth_wall=wall,
         session_ttl=ttl,
-        otp_prompt=bool(data.get("otp_prompt", False)),
         auth_profile_path=path,
     )
 
@@ -340,8 +338,6 @@ def _apply_auth_config(cmd_args: list[str], auth: AuthConfig) -> None:
         cmd_args += ["--on-auth-wall", auth.on_auth_wall]
     if auth.session_ttl is not None and auth.session_ttl > 0:
         cmd_args += ["--session-ttl", str(auth.session_ttl)]
-    if auth.otp_prompt:
-        cmd_args.append("--otp-prompt")
 
 
 def _redact_cmd_args(cmd_args: list[str]) -> list[str]:
@@ -617,9 +613,8 @@ def main():
             session_mode = prompt_choice(
                 "Authentication approach:",
                 [
+                    "Log in now (username + password)",
                     "Reuse existing session cookie file (skip login)",
-                    "Log in now (Patchright)",
-                    "Manual OAuth/SSO bootstrap (export session)",
                 ],
                 0,
             )
@@ -632,26 +627,6 @@ def main():
                     cmd_args += ["--session-file", sess_file]
                 cmd_args += ["--on-auth-wall", "skip"]
                 ui_info("Defaults: on-auth-wall=skip, session-ttl=0 (no check URL)")
-
-            elif session_mode.startswith("Manual"):
-                _hint("After you finish SSO in the browser, press ENTER to export storage_state")
-                _hint(f"See format: {EXAMPLES_DIR}/session.example.json")
-                bootstrap_url = prompt_string(
-                    "Bootstrap URL (login / OAuth start page)",
-                    url,
-                )
-                sess_file = prompt_string(
-                    "Export session to file",
-                    "sessions/bootstrap_session.json",
-                )
-                if not sess_file:
-                    ui_err("Session file is required for bootstrap.")
-                    input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
-                    continue
-                cmd_args += ["--auth-bootstrap", "--session-file", sess_file, "--no-headless"]
-                if bootstrap_url:
-                    cmd_args += ["--login-url", bootstrap_url]
-                cmd_args += ["--on-auth-wall", "skip"]
 
             else:
                 cred_mode = prompt_choice(
@@ -687,8 +662,36 @@ def main():
                     input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
                     continue
 
-                if not auth.login_url:
-                    auth.login_url = url
+                # Always ask for the login page — target URL is often the homepage, not /login
+                login_default = auth.login_url or url
+                auth.login_url = prompt_string(
+                    "Login page URL (where the username/password form is)",
+                    login_default,
+                ) or login_default
+
+                if not auth.username_selector or not auth.password_selector:
+                    custom_sels = prompt_choice(
+                        "Do you want to set CSS selectors for the login fields?",
+                        [
+                            "No — auto-detect (works for most sites)",
+                            "Yes — enter username / password / submit selectors",
+                        ],
+                        0,
+                    )
+                    if custom_sels.startswith("Yes"):
+                        auth.username_selector = prompt_string(
+                            "Username / email CSS selector",
+                            auth.username_selector or 'input[type="email"]',
+                        ) or auth.username_selector
+                        auth.password_selector = prompt_string(
+                            "Password CSS selector",
+                            auth.password_selector or 'input[type="password"]',
+                        ) or auth.password_selector
+                        auth.submit_selector = prompt_string(
+                            "Submit button CSS selector (optional)",
+                            auth.submit_selector or "",
+                        ) or auth.submit_selector
+
                 if not auth.session_file:
                     auth.session_file = "sessions/patchright_session.json"
                 if not auth.on_auth_wall:
@@ -698,7 +701,7 @@ def main():
 
                 ui_info(
                     f"login_url={auth.login_url} · session={auth.session_file} · "
-                    f"on-auth-wall={auth.on_auth_wall} · ttl=0 · otp=off"
+                    f"on-auth-wall={auth.on_auth_wall} · ttl=0"
                     + (f" · check={auth.auth_check_url}" if auth.auth_check_url else "")
                 )
 
@@ -850,7 +853,7 @@ def main():
                     strategy_val = "latency" if "latency" in strategy else strategy
                     cmd_args += ["--proxy-strategy", strategy_val]
                     sticky = prompt_string(
-                        "Sticky requests per proxy before rotate (0 = disable voluntary rotate)", "10"
+                        "Sticky requests per proxy before rotate (0 = every request)", "10"
                     )
                     if sticky and sticky.isdigit():
                         cmd_args += ["--sticky-requests", sticky]
@@ -860,11 +863,31 @@ def main():
             cmd_args += ["--pipeline-file", pipe]
 
         section("Browser")
+        vapt_choice = prompt_choice(
+            "Enable VAPT / recon pipeline?",
+            [
+                "No (scrape only)",
+                "Yes — standard profile (--vapt)",
+                "Yes — deep + active recon (--profile deep)",
+                "Yes — bugbounty passive (--profile bugbounty)",
+                "Yes — quick snapshot (--profile quick)",
+            ],
+            0,
+        )
+        if "standard" in vapt_choice:
+            cmd_args.append("--vapt")
+        elif "deep" in vapt_choice:
+            cmd_args += ["--profile", "deep"]
+        elif "bugbounty" in vapt_choice:
+            cmd_args += ["--profile", "bugbounty"]
+        elif "quick" in vapt_choice:
+            cmd_args += ["--profile", "quick"]
+
         headless_choice = prompt_choice(
             "Run browser in headless mode?",
             [
                 "Yes (Invisible background, fastest)",
-                "No (Visible headed window, useful to bypass/see captchas)",
+                "No (Visible headed window, useful to debug login / captchas)",
             ],
             0,
         )
@@ -881,7 +904,7 @@ def main():
             if pause_consent.startswith("Yes"):
                 cmd_args.append("--pause-for-consent")
         else:
-            ui_info("Auto-dismiss CMP on every page (headed + pause if you need manual Accept)")
+            ui_info("Headless mode — auto-dismiss CMP on every page")
 
         screenshot_choice = prompt_choice(
             "Capture screenshots of CAPTCHA / bot-blocked pages?",

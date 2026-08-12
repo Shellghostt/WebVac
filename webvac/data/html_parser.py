@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 
 from webvac.auth.default_creds import DefaultCredsChecker
 
@@ -73,6 +73,7 @@ class HtmlPageParser:
             "tables": self._tables(soup),
             "lists": self._lists(soup),
             "forms": self._forms(soup),
+            "html_comments": self._comments(soup),
             "media": self._media(soup, base_url),
             "code_blocks": self._code_blocks(soup),
             "emails": self._emails(soup),
@@ -310,22 +311,43 @@ class HtmlPageParser:
         return tables
 
     @staticmethod
+    def _comments(soup) -> list:
+        out = []
+        for c in soup.find_all(string=lambda t: isinstance(t, Comment)):
+            text = str(c).strip()
+            if text:
+                out.append(text[:2000])
+            if len(out) >= 100:
+                break
+        return out
+
+    @staticmethod
     def _forms(soup) -> list:
         forms = []
         for form in soup.find_all("form"):
             fields = []
+            has_file = False
             for inp in form.find_all(["input", "textarea", "select"]):
+                ftype = inp.get("type", "text")
+                if str(ftype).lower() == "file":
+                    has_file = True
                 fields.append({
                     "tag": inp.name,
-                    "type": inp.get("type", "text"),
+                    "type": ftype,
                     "name": inp.get("name", ""),
                     "id": inp.get("id", ""),
+                    "value": inp.get("value", "") or "",
                     "placeholder": inp.get("placeholder", ""),
                     "required": inp.has_attr("required"),
                 })
+            enctype = form.get("enctype", "") or ""
+            if has_file and not enctype:
+                enctype = "multipart/form-data"
             forms.append({
                 "action": form.get("action", ""),
                 "method": form.get("method", "get").upper(),
+                "enctype": enctype,
+                "has_file_upload": has_file or "multipart" in enctype.lower(),
                 "fields": fields,
             })
         return forms

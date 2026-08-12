@@ -191,6 +191,18 @@ class ProxyEntry:
     def is_active(self) -> bool:
         return not self.is_dead and self.cooldown_until <= time.time()
 
+    def to_url(self) -> str:
+        """Full URL with credentials embedded: ``http://user:pass@host:port``."""
+        if not self.username:
+            return self.server
+        parsed = urlparse(self.server)
+        scheme = parsed.scheme or "http"
+        netloc = parsed.netloc or parsed.path
+        user = quote(self.username, safe="")
+        pw = quote(self.password, safe="") if self.password else ""
+        auth = f"{user}:{pw}@" if pw else f"{user}@"
+        return urlunparse((scheme, f"{auth}{netloc}", "", "", "", ""))
+
     def __str__(self) -> str:
         return self.server
 
@@ -605,6 +617,15 @@ _HARD_PROXY_HINTS = (
 
 # Cap sole-proxy cooldown wait so a 429 doesn't freeze the crawl for 5–10 minutes.
 SOLE_PROXY_WAIT_CAP_SEC = 30.0
+
+
+def proxy_entry_to_url(entry) -> Optional[str]:
+    """Get full proxy URL with credentials from a ProxyEntry (or None)."""
+    if entry is None:
+        return None
+    if hasattr(entry, "to_url"):
+        return entry.to_url()
+    return getattr(entry, "server", None) or None
 
 
 def classify_proxy_error(exc: BaseException) -> str:

@@ -53,3 +53,5 @@ WebVac/
 - `sessions/` — auth storage_state  
 - `auth_creds.json` — real credentials (use `examples/auth_creds.example.json`)  
 - `proxies.txt` — local proxy lists  
+- `capsolver.key` — CapSolver API key (use `examples/capsolver.example.key`)  
+- `.env` — optional env secrets (`CAPSOLVER_API_KEY=`)  

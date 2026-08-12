@@ -23,4 +23,33 @@ NETWORK_RULES = [
         "remediation": "Sanitize GraphQL error messages in production.",
         "references": [],
     },
+    {
+        "match": {"category": "network", "key": "verbose_error_page"},
+        "severity": "MEDIUM",
+        "category": "information_disclosure",
+        "title_template": "Verbose Error / Stack Trace Observed",
+        "description_template": (
+            "Error response at {value} appears to leak stack/SQL/framework details."
+        ),
+        "remediation": "Return generic error pages in production; log details server-side only.",
+        "references": ["https://cwe.mitre.org/data/definitions/209.html"],
+    },
+    {
+        "match": {"category": "endpoint", "key": "websocket_endpoint"},
+        "severity": "INFO",
+        "category": "attack_surface",
+        "title_template": "WebSocket Endpoint Observed",
+        "description_template": "WebSocket connection to {value} from {affected_url}.",
+        "remediation": "Authenticate WS channels; validate origin and message schemas.",
+        "references": [],
+    },
+    {
+        "match": {"category": "network", "key": "http_methods_allow"},
+        "severity": "INFO",
+        "category": "attack_surface",
+        "title_template": "HTTP Methods Advertised (Allow)",
+        "description_template": "OPTIONS at {affected_url} advertises: {value}.",
+        "remediation": "Disable unused methods; restrict OPTIONS where possible.",
+        "references": [],
+    },
 ]

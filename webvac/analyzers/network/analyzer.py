@@ -13,6 +13,13 @@ from webvac.analyzers.context import AnalysisContext
 from webvac.analyzers.patterns import DEBUG_JSON_KEYS, SECRET_PATTERNS
 
 _API_PATH = re.compile(r"^/api/|^/v\d+/|^/graphql|/internal/|/admin/", re.I)
+_VERBOSE_ERROR = re.compile(
+    r"traceback \(most recent call last\)|sqlsyntaxerror|ora-\d{5}|"
+    r"mysql_fetch|pg_query|sqlite3\.|mongodb\.error|exception in|"
+    r"stack trace|at [\w.$]+\([^)]+\.java:\d+\)|webpack://|"
+    r"django\.|rails\.|laravel|symfony|werkzeug|fastapi\.exceptions",
+    re.I,
+)
 
 
 class NetworkAnalyzer(BaseAnalyzer):
@@ -141,6 +148,53 @@ class NetworkAnalyzer(BaseAnalyzer):
                         context={"request_url": artifact.request_url},
                     )
                 )
+
+            if artifact.resource_type == "websocket" or artifact.websocket_messages:
+                items.append(
+                    IntelligenceItem(
+                        source=self.name,
+                        category=IntelligenceCategory.ENDPOINT,
+                        key="websocket_endpoint",
+                        value=artifact.request_url,
+                        confidence=1.0,
+                        affected_url=artifact.page_url,
+                        context={
+                            "frame_count": len(artifact.websocket_messages or ()),
+                        },
+                    )
+                )
+
+            if artifact.status >= 400 and artifact.resource_type in (
+                "document", "xhr", "fetch",
+            ):
+                body = artifact.body_preview or ""
+                items.append(
+                    IntelligenceItem(
+                        source=self.name,
+                        category=IntelligenceCategory.NETWORK,
+                        key="error_response",
+                        value=f"{artifact.status} {artifact.request_url}",
+                        confidence=0.9,
+                        affected_url=artifact.page_url,
+                        context={
+                            "status": artifact.status,
+                            "request_url": artifact.request_url,
+                            "body_preview": body[:200],
+                        },
+                    )
+                )
+                if body and _VERBOSE_ERROR.search(body):
+                    items.append(
+                        IntelligenceItem(
+                            source=self.name,
+                            category=IntelligenceCategory.NETWORK,
+                            key="verbose_error_page",
+                            value=f"{artifact.status} {artifact.request_url}",
+                            confidence=0.85,
+                            affected_url=artifact.page_url,
+                            context={"status": artifact.status, "snippet": body[:240]},
+                        )
+                    )
 
             items.extend(self._scan_body(artifact))
 

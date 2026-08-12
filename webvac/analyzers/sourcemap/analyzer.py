@@ -11,6 +11,11 @@ from webvac.analyzers.context import AnalysisContext
 from webvac.analyzers.patterns import ENDPOINT_PATTERNS, SECRET_PATTERNS
 
 _IMPORT_RE = re.compile(r"""import\s+.*?from\s+['"]([^'"]+)['"]""")
+_NODE_MODULES = re.compile(r"(?:^|[\\/])node_modules[\\/]", re.I)
+_APP_HINT = re.compile(
+    r"(?:^|[\\/])(?:src|app|pages|components|lib|server|api|routes)[\\/]",
+    re.I,
+)
 
 
 class SourceMapAnalyzer(BaseAnalyzer):
@@ -72,23 +77,66 @@ class SourceMapAnalyzer(BaseAnalyzer):
             )
         return items
 
+    def _path_kind(self, src_path: str) -> str:
+        if _NODE_MODULES.search(src_path):
+            return "vendor"
+        if _APP_HINT.search(src_path):
+            return "app"
+        return "other"
+
     def analyze(self, ctx: AnalysisContext) -> list[IntelligenceItem]:
         items: list[IntelligenceItem] = []
         for artifact in ctx.artifact_store.get_all(ArtifactType.SOURCE_MAP):
             if not isinstance(artifact, SourceMapArtifact):
                 continue
+
+            if artifact.sources_content:
+                items.append(
+                    IntelligenceItem(
+                        source=self.name,
+                        category=IntelligenceCategory.SECRET,
+                        key="sources_content_present",
+                        value=artifact.map_url or artifact.js_url,
+                        confidence=1.0,
+                        affected_url=artifact.page_url,
+                        context={
+                            "map_url": artifact.map_url,
+                            "js_url": artifact.js_url,
+                            "embedded_file_count": len(artifact.sources_content),
+                        },
+                    )
+                )
+
             for src_path in artifact.sources:
+                kind = self._path_kind(src_path)
                 items.append(
                     IntelligenceItem(
                         source=self.name,
                         category=IntelligenceCategory.TECHNOLOGY,
                         key="recovered_source_path",
                         value=src_path,
-                        confidence=1.0,
+                        confidence=1.0 if kind != "vendor" else 0.7,
                         affected_url=artifact.page_url,
-                        context={"map_url": artifact.map_url, "js_url": artifact.js_url},
+                        context={
+                            "map_url": artifact.map_url,
+                            "js_url": artifact.js_url,
+                            "path_kind": kind,
+                        },
                     )
                 )
+                if kind == "app":
+                    items.append(
+                        IntelligenceItem(
+                            source=self.name,
+                            category=IntelligenceCategory.TECHNOLOGY,
+                            key="recovered_app_source",
+                            value=src_path,
+                            confidence=0.95,
+                            affected_url=artifact.page_url,
+                            context={"map_url": artifact.map_url},
+                        )
+                    )
+
             for src_path, content in artifact.sources_content.items():
                 if content:
                     items.extend(

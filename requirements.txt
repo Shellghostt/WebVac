@@ -7,3 +7,4 @@ aiohttp
 jsbeautifier
 pyotp
 cryptography
+capsolver>=1.0.7

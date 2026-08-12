@@ -145,6 +145,57 @@ async def _post_load_humanize(crawler: "Crawler", page) -> None:
             pass
 
 
+async def _try_auto_captcha(
+    crawler: "Crawler",
+    page,
+    url: str,
+    proxy_entry=None,
+) -> bool:
+    """
+    Detect CAPTCHA on *page*, solve via CapSolver (if configured), inject, re-check.
+
+    Returns True when the page no longer looks bot-blocked after inject.
+    """
+    from webvac.captcha import solver_from_config
+
+    mgr = solver_from_config(crawler.session_config)
+    if not mgr.enabled:
+        return False
+
+    proxy = None
+    if proxy_entry is not None:
+        from webvac.utils.proxy import proxy_entry_to_url
+        proxy = proxy_entry_to_url(proxy_entry)
+    ua = getattr(crawler.browser, "_session_ua", "") or ""
+
+    result = await mgr.try_solve_on_page(
+        page, url=url, proxy=proxy, user_agent=ua,
+    )
+    if not result.success:
+        tqdm.write(f"[Captcha] Auto-solve failed: {result.error}")
+        return False
+
+    needs_reload = getattr(result, "_needs_reload", True)
+    if needs_reload:
+        try:
+            await page.wait_for_timeout(2000)
+            await page.reload(wait_until=crawler.wait_until, timeout=crawler.timeout)
+        except Exception:
+            pass
+    else:
+        try:
+            await page.wait_for_timeout(3000)
+        except Exception:
+            pass
+
+    still = await crawler._after_goto(page, None)
+    if still:
+        tqdm.write("[Captcha] Token injected but page still looks blocked.")
+        return False
+    tqdm.write("[Captcha] Auto-solve succeeded — continuing scrape.")
+    return True
+
+
 async def run_page_scrape(
     crawler: "Crawler", url: str, depth: int = 0, slot: int = 0,
 ) -> dict | None:
@@ -242,7 +293,25 @@ async def run_page_scrape(
             bot_detected = await crawler._after_goto(page, response)
 
             if bot_detected:
-                # Do not mark_failure before stealth retry; rotate after evasion = one strike.
+                # CapSolver (or configured provider) before closing / proxy failure marks
+                if await _try_auto_captcha(crawler, page, url, proxy_entry):
+                    await crawler._handle_consent(page, url)
+                    await _post_load_humanize(crawler, page)
+                    await page.wait_for_timeout(crawler.spa_delay)
+                    await crawler._scroll_page(page)
+                    data = await crawler._collect_page(
+                        page, url, response, depth, network_collector,
+                        screenshot_path=None,
+                    )
+                    await _flush_network(
+                        crawler, network_collector, url,
+                        reason="ok_after_captcha", response=response, page=page,
+                    )
+                    await page.close()
+                    if crawler.proxy_manager and proxy_entry:
+                        crawler.proxy_manager.mark_success(proxy_entry)
+                    return data
+
                 screenshot_path = None
                 if crawler.screenshot_module:
                     screenshot_path = await crawler.screenshot_module.capture_forced(
@@ -284,6 +353,23 @@ async def run_page_scrape(
                                 raise RuntimeError(f"Auth wall abort at {url}")
                             return record
                         if await crawler._after_goto(page2, response2):
+                            if await _try_auto_captcha(crawler, page2, url, proxy_entry):
+                                await crawler._handle_consent(page2, url)
+                                await _post_load_humanize(crawler, page2)
+                                await page2.wait_for_timeout(crawler.spa_delay)
+                                await crawler._scroll_page(page2)
+                                data = await crawler._collect_page(
+                                    page2, url, response2, depth, net2,
+                                    screenshot_path=screenshot_path,
+                                )
+                                await _flush_network(
+                                    crawler, net2, url,
+                                    reason="ok_after_captcha", response=response2, page=page2,
+                                )
+                                await page2.close()
+                                if crawler.proxy_manager and proxy_entry:
+                                    crawler.proxy_manager.mark_success(proxy_entry)
+                                return data
                             await _flush_network(
                                 crawler, net2, url,
                                 reason="bot_detected_retry", response=response2,
@@ -376,8 +462,27 @@ async def run_page_scrape(
 
                     still_blocked = await crawler._after_goto(page3, response3)
                     if still_blocked:
+                        if await _try_auto_captcha(crawler, page3, url, proxy_entry):
+                            tqdm.write(f"[Crawler] [Evasion] CapSolver cleared block: {url}")
+                            await crawler._handle_consent(page3, url)
+                            await _post_load_humanize(crawler, page3)
+                            await page3.wait_for_timeout(crawler.spa_delay)
+                            await crawler._scroll_page(page3)
+                            data = await crawler._collect_page(
+                                page3, url, response3, depth, net3,
+                                screenshot_path=screenshot_path,
+                            )
+                            await _flush_network(
+                                crawler, net3, url,
+                                reason="ok_after_captcha", response=response3, page=page3,
+                            )
+                            await page3.close()
+                            if crawler.proxy_manager and proxy_entry:
+                                crawler.proxy_manager.mark_success(proxy_entry)
+                            return data
+
                         tqdm.write(
-                            f"[Crawler] [Evasion] Automated evasion exhausted for {url}."
+                            f"[Crawler] [Evasion] All automated evasion exhausted for {url}. Skipping."
                         )
                         await _flush_network(
                             crawler, net3, url,
@@ -385,80 +490,7 @@ async def run_page_scrape(
                             page=page3, force=True,
                         )
                         await page3.close()
-
-                        if not crawler.captcha_prompt_enabled:
-                            tqdm.write(
-                                f"[Crawler] Skipping {url} (--no-captcha-prompt is set)."
-                            )
-                            return None
-
-                        proxy_dict = proxy_entry.to_patchright() if proxy_entry else None
-                        solved = await crawler.browser.prompt_captcha_solve(url, proxy=proxy_dict)
-                        if not solved:
-                            tqdm.write(
-                                f"[Crawler] Manual CAPTCHA session failed for {url}. Skipping."
-                            )
-                            return None
-
-                        page4 = await crawler.browser.new_page(slot=slot)
-                        net4 = _attach_network(crawler, page4, url)
-                        try:
-                            await inject_known_consent_cookies(page4, url)
-                            response4 = await page4.goto(
-                                url,
-                                wait_until=crawler.wait_until,
-                                timeout=crawler.timeout,
-                            )
-                            if await _page_is_auth_wall(crawler, page4):
-                                outcome, record = await _handle_auth_wall(
-                                    crawler, page4, url,
-                                    network_collector=net4, response=response4,
-                                )
-                                if outcome == "abort":
-                                    raise RuntimeError(f"Auth wall abort at {url}")
-                                return record
-                            if await crawler._after_goto(page4, response4):
-                                tqdm.write(
-                                    f"[Crawler] Still blocked after manual CAPTCHA on {url}."
-                                )
-                                await _flush_network(
-                                    crawler, net4, url,
-                                    reason="bot_after_captcha", response=response4,
-                                    page=page4, force=True,
-                                )
-                                await page4.close()
-                                return None
-                            await crawler._handle_consent(page4, url)
-                            await _post_load_humanize(crawler, page4)
-                            await page4.wait_for_timeout(crawler.spa_delay)
-                            await crawler._scroll_page(page4)
-                            data = await crawler._collect_page(
-                                page4, url, response4, depth, net4,
-                                screenshot_path=screenshot_path,
-                            )
-                            await _flush_network(
-                                crawler, net4, url,
-                                reason="ok_after_captcha", response=response4, page=page4,
-                            )
-                            await page4.close()
-                            tqdm.write(
-                                f"[Crawler] Scraped {url} after manual CAPTCHA solve."
-                            )
-                            return data
-                        except Exception as post_err:
-                            await _flush_network(
-                                crawler, net4, url,
-                                reason=f"post_captcha_error:{type(post_err).__name__}",
-                                page=page4, force=True,
-                            )
-                            tqdm.write(
-                                f"[Crawler] Post-solve retry failed for {url}: {post_err}"
-                            )
-                            try:
-                                await page4.close()
-                            except Exception:
-                                pass
-                            return None
+                        return None
 
                     tqdm.write(f"[Crawler] [Evasion] Success: {url}")
                     await crawler._handle_consent(page3, url)

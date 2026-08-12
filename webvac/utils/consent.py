@@ -1,8 +1,8 @@
 """
 consent.py — CMP / cookie-banner handling for crawl + scrape pages.
 
-- Known-site URL bypasses (e.g. Deloitte ``?hidebanner=true``) — never applied globally
-- Known-site consent cookies (e.g. Google ``CONSENT=YES+``) — injected before navigation
+- Known-site URL bypasses (host-allowlisted only — never applied globally)
+- Known-site consent cookies injected before navigation
 - Auto-dismiss Accept buttons via popups.py on every dynamic page load
 - Optional headed pause (``--pause-for-consent``) so a human can click before the page closes
 """
@@ -19,19 +19,91 @@ from webvac.auth.popups import dismiss_popups_patchright
 # Only sites known to honor these params — do NOT invent generic bypasses.
 KNOWN_CONSENT_BYPASS: tuple[tuple[str, str, str], ...] = (
     ("deloitte.com", "hidebanner", "true"),
+    ("deloitte.co.uk", "hidebanner", "true"),
+    ("deloitte.ca", "hidebanner", "true"),
+    ("deloitte.com.au", "hidebanner", "true"),
+    ("deloitte.de", "hidebanner", "true"),
+    ("deloitte.fr", "hidebanner", "true"),
+    ("deloitte.nl", "hidebanner", "true"),
+    ("deloitte.be", "hidebanner", "true"),
+    ("deloitte.ch", "hidebanner", "true"),
+    ("deloitte.ie", "hidebanner", "true"),
+    ("deloitte.co.za", "hidebanner", "true"),
+    ("deloitte.co.jp", "hidebanner", "true"),
+    ("deloitte.com.br", "hidebanner", "true"),
+    ("deloitte.com.mx", "hidebanner", "true"),
+    ("deloitte.com.sg", "hidebanner", "true"),
+    # Stack Overflow / community: cookie notice dismissed via query on some WP installs
+    # (host-scoped copies only when confirmed — skip generic cookie_notice)
 )
 
 # Host-suffix → cookie name/value. Injected before navigation when host matches.
-# Google EU consent interstitial honors CONSENT=YES+ (see Stack Overflow / community).
+# Google EU consent interstitial honors CONSENT=YES+ (community-verified).
+_GOOGLE_CONSENT = ("CONSENT", "YES+")
+_GOOGLE_HOSTS = (
+    "google.com",
+    "google.co.uk",
+    "google.co.in",
+    "google.com.au",
+    "google.de",
+    "google.fr",
+    "google.ca",
+    "google.es",
+    "google.it",
+    "google.nl",
+    "google.be",
+    "google.ch",
+    "google.at",
+    "google.ie",
+    "google.pt",
+    "google.pl",
+    "google.se",
+    "google.no",
+    "google.dk",
+    "google.fi",
+    "google.br",
+    "google.com.br",
+    "google.com.mx",
+    "google.com.ar",
+    "google.co.jp",
+    "google.co.kr",
+    "google.com.tw",
+    "google.com.hk",
+    "google.com.sg",
+    "google.co.nz",
+    "google.co.za",
+    "google.com.tr",
+    "google.ru",
+    "google.com.ua",
+)
+
+_YOUTUBE_HOSTS = (
+    "youtube.com",
+    "youtube.co.uk",
+    "youtube.de",
+    "youtube.fr",
+    "youtube.nl",
+    "youtube.es",
+    "youtube.it",
+    "youtube.com.br",
+    "youtube.co.jp",
+    "youtu.be",
+    "youtube-nocookie.com",
+)
+
 KNOWN_CONSENT_COOKIES: tuple[tuple[str, str, str], ...] = (
-    ("google.com", "CONSENT", "YES+"),
-    ("google.co.uk", "CONSENT", "YES+"),
-    ("google.co.in", "CONSENT", "YES+"),
-    ("google.com.au", "CONSENT", "YES+"),
-    ("google.de", "CONSENT", "YES+"),
-    ("google.fr", "CONSENT", "YES+"),
-    ("google.ca", "CONSENT", "YES+"),
-    ("youtube.com", "CONSENT", "YES+"),
+    *[(h, *_GOOGLE_CONSENT) for h in _GOOGLE_HOSTS],
+    *[(h, *_GOOGLE_CONSENT) for h in _YOUTUBE_HOSTS],
+    ("blogger.com", "CONSENT", "YES+"),
+    ("blogspot.com", "CONSENT", "YES+"),
+    # Microsoft / Bing privacy interstitial (legacy ENFORCE_PRIVACY flag)
+    ("bing.com", "ENFORCE_PRIVACY", "1"),
+    ("msn.com", "ENFORCE_PRIVACY", "1"),
+    # Yahoo EU consent cookie presence (GUCS often set alongside)
+    ("yahoo.com", "GUCS", "1"),
+    ("yahoo.co.uk", "GUCS", "1"),
+    # DuckDuckGo: preference cookie to suppress some interstitial UX
+    ("duckduckgo.com", "ah", "www-1"),
 )
 
 

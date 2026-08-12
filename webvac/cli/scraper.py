@@ -162,16 +162,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session TTL in seconds (0 = never expire). Checked on restore.",
     )
     p.add_argument(
-        "--auth-bootstrap",
-        action="store_true",
-        help="Open a visible browser for manual OAuth/SSO login, then export --session-file.",
-    )
-    p.add_argument(
-        "--otp-prompt",
-        action="store_true",
-        help="Prompt for OTP/MFA codes during login when an OTP field appears.",
-    )
-    p.add_argument(
         "--auth-profile",
         default=None,
         metavar="FILE",
@@ -182,6 +172,40 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="When logging in, disable voluntary proxy rotation to keep the session IP stable.",
+    )
+
+    # VAPT / recon pipeline (default OFF)
+    from webvac.config.scan_profiles import list_profiles
+
+    _profile_names = sorted(list_profiles().keys())
+    p.add_argument(
+        "--vapt",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable VAPT collectors + post-crawl analysis (default profile: standard). "
+            "Does not change scrape output; adds recon/ findings under the scan dir."
+        ),
+    )
+    p.add_argument(
+        "--profile",
+        choices=_profile_names,
+        default=None,
+        metavar="NAME",
+        help=(
+            "VAPT scan profile: "
+            + ", ".join(f"{n} ({d})" for n, d in list_profiles().items())
+            + ". Implies --vapt."
+        ),
+    )
+    p.add_argument(
+        "--active-recon",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable out-of-band active probes (interesting files, GraphQL, OPTIONS). "
+            "Implies --vapt. Use only on authorized targets."
+        ),
     )
 
     # Output
@@ -348,15 +372,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable automatic screenshots of CAPTCHA / bot-block pages.",
     )
 
-    # Manual CAPTCHA solver
     p.add_argument(
-        "--no-captcha-prompt",
-        action="store_true",
+        "--captcha-solver",
+        choices=["none", "capsolver"],
+        default=None,
         help=(
-            "Disable the interactive manual CAPTCHA prompt. When set, WebVac will "
-            "skip the page instead of pausing to ask you to solve the CAPTCHA. "
-            "Use this flag in automated / CI environments."
+            "Auto CAPTCHA provider (default: none). "
+            "Requires --captcha-api-key or CAPSOLVER_API_KEY / WEBVAC_CAPSOLVER_KEY."
         ),
+    )
+    p.add_argument(
+        "--captcha-api-key",
+        default=None,
+        metavar="KEY",
+        help="CapSolver (or provider) API key.",
+    )
+    p.add_argument(
+        "--captcha-timeout",
+        type=float,
+        default=None,
+        metavar="SECS",
+        help="Max seconds to wait for CapSolver result (default: 120).",
     )
 
     p.add_argument(
@@ -419,7 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-_DEFAULT_SEC_CH_UA = '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+_DEFAULT_SEC_CH_UA = '"Chromium";v="133", "Google Chrome";v="133", "Not-A.Brand";v="99"'
 
 
 def _proxy_to_identity(entry) -> SlotIdentity:
@@ -499,9 +535,10 @@ async def _persist_run(
     output_formats: list,
     *,
     interrupted: bool = False,
+    recon: dict | None = None,
 ) -> None:
-    """Download assets and write scrape output files."""
-    if not results:
+    """Download assets and write scrape (+ optional VAPT recon) output files."""
+    if not results and not recon:
         print(f"\n{Fore.YELLOW}No data was collected.{Style.RESET_ALL}")
         return
 
@@ -517,7 +554,7 @@ async def _persist_run(
         sess = ScanSession(args.output, scan)
         sess.ensure_dirs()
         layout = sess.layout_paths()
-        if session_config.get("download_pdfs", True):
+        if session_config.get("download_pdfs", True) and results:
             pdf_urls = collect_pdf_urls(results)
             if pdf_urls:
                 dl = AssetDownloader(layout["assets_pdfs"])
@@ -530,26 +567,95 @@ async def _persist_run(
 
     storage = Storage(output_dir=args.output)
     paths = storage.save(
-        results,
+        results or [],
         label=args.label,
         formats=output_formats,
         scan=scan,
         interrupted=interrupted,
         assets_meta=assets_meta,
+        recon=recon,
+        artifact_store=getattr(crawler, "artifact_store", None) if crawler else None,
     )
 
     label = "Partial save" if interrupted else "Success"
-    print(f"\n{Fore.GREEN}{label}: {len(results)} page(s) saved.{Style.RESET_ALL}")
+    n = len(results or [])
+    print(f"\n{Fore.GREEN}{label}: {n} page(s) saved.{Style.RESET_ALL}")
     for fmt, path in paths.items():
         if fmt == "session_dir":
             continue
         print(f"  {fmt.upper():8s} -> {path}")
+    if recon:
+        fc = recon.get("findings_count") or {}
+        obs = recon.get("observations_count", 0)
+        print(
+            f"{Fore.CYAN}  VAPT     -> {obs} observations, "
+            f"findings={fc or 0}{Style.RESET_ALL}"
+        )
     if scan:
         print(f"\n{Fore.CYAN}Scan ID: {scan.scan_id}{Style.RESET_ALL}")
         if scan.parent_scan_id:
             print(f"  Parent:  {scan.parent_scan_id}")
     if interrupted:
         print(f"\n{Fore.YELLOW}Run was interrupted — open scrape/report.html for partial results.{Style.RESET_ALL}")
+
+
+def _apply_vapt_config(session_config: dict, args, seed_url: str) -> dict:
+    """Merge --profile / --vapt / --active-recon into session_config."""
+    from urllib.parse import urlparse
+
+    from webvac.config.scan_profiles import apply_profile
+
+    profile = getattr(args, "profile", None)
+    want_vapt = bool(getattr(args, "vapt", False) or profile or getattr(args, "active_recon", False))
+    if not want_vapt:
+        return session_config
+
+    name = profile or "standard"
+    session_config = apply_profile(session_config, name)
+    session_config["vapt_enabled"] = True
+    if getattr(args, "active_recon", False):
+        session_config["active_recon"] = True
+        probes = dict(session_config.get("active_probes") or {})
+        for key in ("files", "graphql", "swagger", "git", "env", "http_methods"):
+            probes.setdefault(key, True)
+        session_config["active_probes"] = probes
+
+    host = (urlparse(seed_url).hostname or "").lower()
+    if host and not session_config.get("allowed_domains"):
+        session_config["allowed_domains"] = [host]
+
+    print(
+        f"{Fore.CYAN}[VAPT] profile={session_config.get('profile')}  "
+        f"active_recon={bool(session_config.get('active_recon'))}  "
+        f"collectors={{{', '.join(k for k, v in (session_config.get('collectors') or {}).items() if v)}}}"
+        f"{Style.RESET_ALL}"
+    )
+    return session_config
+
+
+async def _run_vapt_analysis(crawler, session_config: dict, seed_url: str) -> dict | None:
+    """Post-crawl analyzer + optional active probes. Returns recon dict or None."""
+    if not session_config.get("vapt_enabled"):
+        return None
+    store = getattr(crawler, "artifact_store", None)
+    scan = getattr(crawler, "_scan", None)
+    if not store or not scan:
+        print(f"{Fore.YELLOW}[VAPT] No artifact store — analysis skipped.{Style.RESET_ALL}")
+        return None
+
+    from webvac.core.runner import PipelineRunner
+
+    runner = PipelineRunner(session_config)
+    sm = getattr(crawler, "scope_manager", None)
+    scope = sm.scope if sm is not None else runner.build_scope(seed_url)
+    print(f"{Fore.CYAN}[VAPT] Running analyzers…{Style.RESET_ALL}")
+    recon = await runner.run_analysis(store, scan, scope)
+    n_find = sum((recon.get("findings_count") or {}).values())
+    print(
+        f"{Fore.GREEN}[VAPT] Done — {recon.get('observations_count', 0)} observations, "
+        f"{n_find} findings{Style.RESET_ALL}"
+    )
+    return recon
 
 
 async def run(args):
@@ -583,6 +689,15 @@ async def run(args):
             output_formats = ["json", "csv", "html"]
     print(f"  Formats     : {', '.join(output_formats)}")
     print(f"{'='*60}{Style.RESET_ALL}\n")
+
+    # Login requires a real browser engine (not lightweight HTTP).
+    if args.login:
+        if args.engine == "lightweight":
+            print(
+                f"{Fore.YELLOW}[Auth] Forcing engine=dynamic because login "
+                f"requires a browser session.{Style.RESET_ALL}"
+            )
+            args.engine = "dynamic"
 
     # ── Proxy playbook (sticky / cooldown / geo pin defaults) ─────────────────
     from webvac.utils.proxy_playbook import apply_proxy_playbook
@@ -705,30 +820,25 @@ async def run(args):
     )
 
     try:
-        # ── Auth (restore / login / bootstrap) via AuthManager ───────────────
+        # ── Auth (restore / login) via AuthManager ─────────────────────────────
         needs_auth = bool(
             args.login
-            or args.auth_bootstrap
             or (args.session_file and os.path.isfile(args.session_file))
             or args.auth_profile
         )
         auth_manager = None
         authenticated = False
 
-        if needs_auth or args.login or args.auth_bootstrap:
-            # Force dynamic engine when authenticating
-            if args.login or args.auth_bootstrap:
-                if args.engine == "lightweight":
-                    print(
-                        f"{Fore.YELLOW}[Auth] Forcing engine=dynamic because login/bootstrap "
-                        f"requires a browser session.{Style.RESET_ALL}"
-                    )
-                    args.engine = "dynamic"
+        if needs_auth or args.login:
+            # --auth-profile with creds implies login
+            if args.auth_profile and not args.login:
+                profile_peek = build_profile_from_args(args, profile_path=args.auth_profile)
+                if profile_peek.has_credentials() or resolve_credentials(
+                    profile_peek.username, profile_peek.password
+                )[0]:
+                    args.login = True
 
             profile = build_profile_from_args(args, profile_path=args.auth_profile)
-            # Env credential fallback already applied in build_profile_from_args
-            if args.otp_prompt:
-                profile.otp_prompt = True
             if args.on_auth_wall:
                 profile.on_auth_wall = args.on_auth_wall
             if args.session_ttl:
@@ -745,35 +855,23 @@ async def run(args):
                 wait_until=args.wait_until,
             )
 
-            if args.auth_bootstrap:
-                if not args.session_file:
-                    print(f"{Fore.RED}[Auth] --auth-bootstrap requires --session-file{Style.RESET_ALL}")
-                    return
-                if not args.no_headless:
+            restored = False
+            # Explicit --login means a fresh login; do not short-circuit on stale session.
+            if not args.login and profile.session_file and os.path.isfile(profile.session_file):
+                restored = await auth_manager.restore(profile.session_file)
+                if restored:
                     print(
-                        f"{Fore.YELLOW}[Auth] Tip: use --no-headless with --auth-bootstrap "
-                        f"so you can complete OAuth visually.{Style.RESET_ALL}"
+                        f"{Fore.GREEN}[Auth] Session restored — skipping login."
+                        f"{Style.RESET_ALL}"
                     )
-                bootstrap_url = args.login_url or args.url
-                ok = await auth_manager.bootstrap_manual(
-                    url=bootstrap_url, session_file=args.session_file,
+                    authenticated = True
+            elif args.login and profile.session_file and os.path.isfile(profile.session_file):
+                print(
+                    f"{Fore.CYAN}[Auth] --login: ignoring existing session file "
+                    f"({profile.session_file}); performing fresh login.{Style.RESET_ALL}"
                 )
-                if not ok:
-                    print(f"{Fore.RED}[Auth] Bootstrap failed.{Style.RESET_ALL}")
-                    return
-                authenticated = True
-            else:
-                restored = False
-                if profile.session_file and os.path.isfile(profile.session_file):
-                    restored = await auth_manager.restore(profile.session_file)
-                    if restored:
-                        print(
-                            f"{Fore.GREEN}[Auth] Session restored — skipping login."
-                            f"{Style.RESET_ALL}"
-                        )
-                        authenticated = True
 
-                if args.login and not restored:
+            if (args.login or (not restored and profile.has_credentials())) and not restored:
                     user, pw = resolve_credentials(profile.username, profile.password)
                     if not user or not pw:
                         print(
@@ -787,12 +885,12 @@ async def run(args):
                     ok = await auth_manager.login(seed_url=args.url)
                     if not ok:
                         print(
-                            f"{Fore.YELLOW}[Warning] Login may have failed — continuing anyway."
-                            f"{Style.RESET_ALL}"
+                            f"{Fore.RED}[Auth] Login failed — aborting. "
+                            f"Check --login-url, credentials, and selectors.{Style.RESET_ALL}"
                         )
-                    else:
-                        authenticated = True
-                        print(f"{Fore.GREEN}[Auth] Login successful.{Style.RESET_ALL}")
+                        return
+                    authenticated = True
+                    print(f"{Fore.GREEN}[Auth] Login successful.{Style.RESET_ALL}")
 
         # ── Crawl / Scrape ────────────────────────────────────────────────────
         # ScreenshotModule (CAPTCHA pages only)
@@ -806,6 +904,7 @@ async def run(args):
         pipeline_manager = PipelineManager(args.pipeline_file) if args.pipeline_file else None
 
         session_config = dict(DEFAULT_CONFIG)
+        session_config = _apply_vapt_config(session_config, args, args.url)
         session_config["max_depth"] = args.depth
         session_config["max_pages"] = args.max_pages
         session_config["skip_origin_validate"] = bool(getattr(args, "skip_origin_validate", False))
@@ -822,6 +921,31 @@ async def run(args):
         )
         session_config["humanize_after_goto"] = session_config["humanize"]
         browser.configure_humanize(session_config)
+        if getattr(args, "captcha_solver", None):
+            session_config["captcha_solver"] = args.captcha_solver
+            if args.captcha_solver == "none":
+                session_config["captcha_solver_disabled"] = True
+        if getattr(args, "captcha_api_key", None):
+            session_config["captcha_api_key"] = args.captcha_api_key
+        if getattr(args, "captcha_timeout", None) is not None:
+            session_config["captcha_solver_timeout_sec"] = float(args.captcha_timeout)
+        # Enable solver when provider + key are present (CLI / env / capsolver.key)
+        from webvac.captcha.config import CaptchaSolverConfig
+        _cap = CaptchaSolverConfig.from_mapping(session_config)
+        if _cap.api_key and _cap.enabled:
+            session_config["captcha_solver"] = "capsolver"
+            session_config["captcha_api_key"] = _cap.api_key
+            session_config["captcha_solver_enabled"] = True
+            print(
+                f"{Fore.CYAN}[Captcha] Auto-solver=capsolver "
+                f"(key …{_cap.api_key[-4:]}){Style.RESET_ALL}"
+            )
+        elif getattr(args, "captcha_solver", None) == "capsolver" and not _cap.api_key:
+            print(
+                f"{Fore.YELLOW}[Captcha] --captcha-solver capsolver but no API key. "
+                f"Put it in capsolver.key, CAPSOLVER_API_KEY, or --captcha-api-key."
+                f"{Style.RESET_ALL}"
+            )
         if getattr(args, "dismiss_selector", None):
             session_config["dismiss_selectors"] = list(args.dismiss_selector)
         if session_config["pause_for_consent"] and not getattr(args, "no_headless", False):
@@ -836,12 +960,11 @@ async def run(args):
         if origin_target:
             session_config["origin_access"] = origin_target.to_dict()
 
-        # Auth crawl policies
-        pin_proxy = bool(args.login or args.auth_bootstrap or authenticated)
+        # Auth crawl policies — only when login actually succeeded
+        pin_proxy = bool(authenticated)
         if args.no_auth_proxy_rotate or pin_proxy:
-            # Default: pin proxy when authenticated unless user overrides later
             session_config["auth_pin_proxy"] = True
-        if authenticated or args.login:
+        if authenticated:
             session_config["authenticated"] = True
             session_config["on_auth_wall"] = args.on_auth_wall
             session_config["auth_check_url"] = args.auth_check_url
@@ -874,7 +997,7 @@ async def run(args):
             deny_url_regex=args.deny_url_regex,
             pipeline_manager=pipeline_manager,
             engine=args.engine,
-            captcha_prompt_enabled=not args.no_captcha_prompt,
+            captcha_prompt_enabled=False,
             sticky_requests=sticky_requests,
             recon_config=session_config,
             auth_manager=auth_manager,
@@ -897,6 +1020,13 @@ async def run(args):
                 f"{len(results)} partial result(s)...{Style.RESET_ALL}"
             )
 
+        recon = None
+        if session_config.get("vapt_enabled") and not interrupted:
+            try:
+                recon = await _run_vapt_analysis(crawler, session_config, args.url)
+            except Exception as exc:
+                print(f"{Fore.YELLOW}[VAPT] Analysis failed (non-fatal): {exc}{Style.RESET_ALL}")
+
         await _persist_run(
             args,
             crawler,
@@ -904,6 +1034,7 @@ async def run(args):
             session_config,
             output_formats,
             interrupted=interrupted,
+            recon=recon,
         )
 
     finally:

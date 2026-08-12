@@ -32,6 +32,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "graphql": False,
             "oauth": False,
             "cloud": False,
+            "html": True,
         },
         "active_recon": False,
         "javascript": {
@@ -60,6 +61,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "graphql": False,
             "oauth": False,
             "cloud": False,
+            "html": True,
         },
         "active_recon": False,
         "javascript": {
@@ -89,6 +91,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "graphql": True,
             "oauth": True,
             "cloud": True,
+            "html": True,
         },
         "active_recon": True,
         "active_probes": {
@@ -97,6 +100,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "swagger": True,
             "git": True,
             "env": True,
+            "http_methods": True,
         },
         "javascript": {
             "download_external": True,
@@ -125,6 +129,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "graphql": True,
             "oauth": False,
             "cloud": True,
+            "html": True,
         },
         "active_recon": False,
         "javascript": {

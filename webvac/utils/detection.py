@@ -43,7 +43,7 @@ BLOCKED_URL_KEYWORDS: list[str] = [
     "/challenge",
     "/blocked",
     "recaptcha",
-    "/verify",
+    "/verify-human",
     "bot-check",
     "bot_check",
     "security-check",
@@ -111,27 +111,28 @@ async def is_bot_detected(page, response=None) -> bool:
     Returns:
         bool — True if bot-blocking is detected, False otherwise.
     """
-    # 1. Status code check
-    if response is not None:
-        try:
-            if response.status in BLOCKED_STATUS_CODES:
-                return True
-        except Exception:
-            pass
-
     current_url = ""
     try:
         current_url = (page.url or "").lower()
     except Exception:
         pass
 
-    # 2. Auth wall → not a bot block (handled separately by crawl policy)
+    # 1. Auth wall → not a bot block (handled separately by crawl policy).
+    #    Must run BEFORE status codes — 401/403 on login pages are auth walls, not blocks.
     try:
         from webvac.auth.wall import is_auth_wall_page
         if await is_auth_wall_page(page):
             return False
     except Exception:
         pass
+
+    # 2. Status code check (after auth-wall exclusion)
+    if response is not None:
+        try:
+            if response.status in BLOCKED_STATUS_CODES:
+                return True
+        except Exception:
+            pass
 
     # 3. URL check
     for kw in BLOCKED_URL_KEYWORDS:
@@ -211,15 +212,15 @@ def is_bot_detected_sync(url: str, title: str, body: str, status: int | None = N
     Returns:
         bool — True if bot-blocking is detected.
     """
-    if status is not None and status in BLOCKED_STATUS_CODES:
-        return True
-
     try:
         from webvac.auth.wall import is_auth_wall
         if is_auth_wall(url=url, title=title or "", html=body or ""):
             return False
     except Exception:
         pass
+
+    if status is not None and status in BLOCKED_STATUS_CODES:
+        return True
 
     url_lower = url.lower()
     for kw in BLOCKED_URL_KEYWORDS:
