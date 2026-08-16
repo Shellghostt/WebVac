@@ -123,6 +123,7 @@ async def _flush_network(
 
     path = dump_network_debug(
         output_dir=crawler.output_dir or "scraped_data",
+        debug_dir=getattr(crawler, "network_debug_dir", None),
         page_url=url,
         reason=reason,
         entries=entries,
@@ -162,6 +163,12 @@ async def _try_auto_captcha(
     if not mgr.enabled:
         return False
 
+    # Ensure network fingerprints were collected (attach may already have run pre-goto)
+    try:
+        mgr.attach_network_watcher(page)
+    except Exception:
+        pass
+
     proxy = None
     if proxy_entry is not None:
         from webvac.utils.proxy import proxy_entry_to_url
@@ -194,6 +201,18 @@ async def _try_auto_captcha(
         return False
     tqdm.write("[Captcha] Auto-solve succeeded — continuing scrape.")
     return True
+
+
+def _maybe_attach_captcha_watcher(crawler: "Crawler", page) -> None:
+    """Start captcha network fingerprinting before navigation when CapSolver is on."""
+    try:
+        from webvac.captcha import solver_from_config
+
+        mgr = solver_from_config(crawler.session_config)
+        if mgr.enabled:
+            mgr.attach_network_watcher(page)
+    except Exception:
+        pass
 
 
 async def run_page_scrape(
@@ -247,6 +266,7 @@ async def run_page_scrape(
         try:
             page = await crawler.browser.new_page(slot=slot)
             network_collector = _attach_network(crawler, page, url)
+            _maybe_attach_captcha_watcher(crawler, page)
 
             cookie_note = await inject_known_consent_cookies(page, url)
             if cookie_note:
@@ -328,6 +348,7 @@ async def run_page_scrape(
                     stealth_switched = True
                     tqdm.write(f"[Crawler] Retrying {url} after challenge wait...")
                     page2 = await crawler.browser.new_page(slot=slot)
+                    _maybe_attach_captcha_watcher(crawler, page2)
                     net2 = _attach_network(crawler, page2, url)
                     try:
                         await inject_known_consent_cookies(page2, url)
@@ -427,6 +448,7 @@ async def run_page_scrape(
                 await asyncio.sleep(random.uniform(2.0, 5.0))
 
                 page3 = await crawler.browser.new_page(slot=slot)
+                _maybe_attach_captcha_watcher(crawler, page3)
                 net3 = _attach_network(crawler, page3, url)
                 try:
                     domain = urlparse(url).netloc

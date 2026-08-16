@@ -15,6 +15,7 @@ class CaptchaType(str, Enum):
     """
 
     UNKNOWN = "unknown"
+    CHALLENGE_PAGE = "challenge_page"  # CF interstitial etc. — usually not CapSolver-widget
     RECAPTCHA_V2 = "recaptcha_v2"
     RECAPTCHA_V2_INVISIBLE = "recaptcha_v2_invisible"
     RECAPTCHA_V2_CALLBACK = "recaptcha_v2_callback"
@@ -37,6 +38,8 @@ class CaptchaInfo:
     is_enterprise: bool = False
     user_agent: str = ""
     proxy: Optional[str] = None
+    confidence: float = 0.0
+    signals: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -44,7 +47,7 @@ class CaptchaInfo:
         return bool(
             self.website_key
             and self.captcha_type
-            not in (CaptchaType.UNKNOWN,)
+            not in (CaptchaType.UNKNOWN, CaptchaType.CHALLENGE_PAGE)
         )
 
     @property

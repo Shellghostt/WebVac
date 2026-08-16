@@ -426,6 +426,10 @@ class AuthHandler:
                 return False
 
             mgr = solver_from_config()
+            try:
+                mgr.attach_network_watcher(page)
+            except Exception:
+                pass
             url = getattr(page, "url", "") or ""
             login_url = url
             ua = ""

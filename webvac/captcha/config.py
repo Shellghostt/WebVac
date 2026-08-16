@@ -91,7 +91,7 @@ class CaptchaSolverConfig:
     poll_interval_sec: float = 2.0
     max_retries: int = 2
     use_proxy: bool = False  # CapSolver proxy task types when True
-    fallback_manual: bool = True
+    fallback_manual: bool = False  # unused (CapSolver-only; no headed prompt)
 
     @classmethod
     def from_mapping(
@@ -141,5 +141,5 @@ class CaptchaSolverConfig:
             poll_interval_sec=float(data.get("captcha_poll_interval_sec", 2) or 2),
             max_retries=int(data.get("captcha_solver_retries", 2) or 2),
             use_proxy=bool(data.get("captcha_use_proxy", False)),
-            fallback_manual=bool(data.get("captcha_fallback_manual", True)),
+            fallback_manual=bool(data.get("captcha_fallback_manual", False)),
         )

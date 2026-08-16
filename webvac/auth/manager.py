@@ -188,6 +188,14 @@ class AuthManager:
         paused = False
         try:
             print(f"[Auth] Opening login page: {login_url}")
+            try:
+                from webvac.captcha import solver_from_config
+
+                _mgr = solver_from_config()
+                if _mgr.enabled:
+                    _mgr.attach_network_watcher(page)
+            except Exception:
+                pass
             await page.goto(login_url, wait_until=self.wait_until, timeout=self.timeout)
             await asyncio.sleep(0.5)
             await dismiss_popups_patchright(
@@ -288,7 +296,10 @@ class AuthManager:
             pass
         print(f"[Auth] Login unsuccessful ({reason}). Current URL: {url or '(unknown)'}")
         if self.headless:
-            print("[Auth] Tip: re-run with --no-headless to debug the login form.")
+            print(
+                "[Auth] Tip: CapSolver still runs in headless. "
+                "Re-run with --no-headless only if you need to visually debug the form."
+            )
         return False
 
     async def _handle_post_login_captcha(self, page) -> bool:
@@ -322,6 +333,10 @@ class AuthManager:
                 return False
 
             mgr = solver_from_config()
+            try:
+                mgr.attach_network_watcher(page)
+            except Exception:
+                pass
             url = getattr(page, "url", "") or ""
             ua = ""
             try:

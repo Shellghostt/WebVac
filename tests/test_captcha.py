@@ -346,5 +346,220 @@ class TestErrorSelectorsNarrow(unittest.TestCase):
             self.assertNotIn('[role="alert"]', sel, "Generic [role=alert] causes false login failures")
 
 
+class TestNetworkFingerprint(unittest.TestCase):
+    def test_recaptcha_v3_render(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://www.google.com/recaptcha/api.js?render=6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI"
+        )
+        self.assertIsNotNone(hint)
+        self.assertEqual(hint.family, "recaptcha")
+        self.assertTrue(hint.v3)
+        self.assertEqual(hint.sitekey, "6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI")
+
+    def test_recaptcha_v2_anchor_k(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://www.google.com/recaptcha/api2/anchor?k=6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u&size=normal"
+        )
+        self.assertIsNotNone(hint)
+        self.assertEqual(hint.family, "recaptcha")
+        self.assertFalse(hint.v3)
+        self.assertEqual(hint.sitekey, "6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u")
+        self.assertIn("network_recaptcha_v2_frame", hint.signals)
+
+    def test_recaptcha_invisible(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://www.google.com/recaptcha/api2/anchor?k=6Lfxxx&size=invisible"
+        )
+        self.assertIsNotNone(hint)
+        self.assertTrue(hint.invisible)
+
+    def test_enterprise(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://www.google.com/recaptcha/enterprise.js?render=6LeEnterpriseKey"
+        )
+        self.assertIsNotNone(hint)
+        self.assertTrue(hint.enterprise)
+        self.assertTrue(hint.v3)
+        self.assertEqual(hint.sitekey, "6LeEnterpriseKey")
+
+    def test_hcaptcha(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://js.hcaptcha.com/1/api.js?sitekey=10000000-ffff-ffff-ffff-000000000001"
+        )
+        self.assertIsNotNone(hint)
+        self.assertEqual(hint.family, "hcaptcha")
+        self.assertEqual(hint.sitekey, "10000000-ffff-ffff-ffff-000000000001")
+
+    def test_turnstile(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://challenges.cloudflare.com/turnstile/v0/api.js?sitekey=0x4AAAAAAADemoKey"
+        )
+        self.assertIsNotNone(hint)
+        self.assertEqual(hint.family, "turnstile")
+        self.assertEqual(hint.sitekey, "0x4AAAAAAADemoKey")
+
+    def test_challenge_platform(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        hint = fingerprint_captcha_url(
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"
+        )
+        self.assertIsNotNone(hint)
+        self.assertEqual(hint.family, "challenge_page")
+        self.assertFalse(hint.sitekey)
+
+    def test_unrelated_url(self):
+        from webvac.captcha.network_watch import fingerprint_captcha_url
+
+        self.assertIsNone(fingerprint_captcha_url("https://example.com/static/app.js"))
+
+
+class TestMergeRanking(unittest.TestCase):
+    def test_network_recaptcha_beats_dom_turnstile_leftover(self):
+        from webvac.captcha.extract import merge_dom_and_network
+        from webvac.captcha.network_watch import NetworkHint
+
+        page_url = "https://example.com/protected"
+        dom = [
+            CaptchaInfo(
+                captcha_type=CaptchaType.TURNSTILE,
+                website_url=page_url,
+                website_key="0x4AAAAAAAleftover",
+                confidence=40.0,
+                signals=["script_turnstile"],
+            ),
+        ]
+        hints = [
+            NetworkHint(
+                family="recaptcha",
+                sitekey="6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u",
+                confidence=75.0,
+                signals=["network_recaptcha", "network_recaptcha_v2_frame"],
+                url="https://www.google.com/recaptcha/api2/anchor?k=6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u",
+            ),
+        ]
+        ranked = merge_dom_and_network(dom, hints, page_url=page_url)
+        self.assertTrue(ranked)
+        self.assertTrue(ranked[0].is_recaptcha)
+        self.assertEqual(ranked[0].website_key, "6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u")
+        self.assertGreater(ranked[0].confidence, 40.0)
+
+    def test_network_boosts_matching_dom(self):
+        from webvac.captcha.extract import merge_dom_and_network
+        from webvac.captcha.network_watch import NetworkHint
+
+        page_url = "https://example.com/"
+        key = "6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u"
+        dom = [
+            CaptchaInfo(
+                captcha_type=CaptchaType.RECAPTCHA_V2,
+                website_url=page_url,
+                website_key=key,
+                confidence=55.0,
+                signals=["dom_widget"],
+            ),
+        ]
+        hints = [
+            NetworkHint(
+                family="recaptcha",
+                sitekey=key,
+                confidence=70.0,
+                signals=["network_recaptcha_v2_frame"],
+            ),
+        ]
+        ranked = merge_dom_and_network(dom, hints, page_url=page_url)
+        self.assertEqual(len(ranked), 1)
+        self.assertGreaterEqual(ranked[0].confidence, 55.0 + 30.0 - 0.1)
+        self.assertIn("network_recaptcha_v2_frame", ranked[0].signals)
+
+    def test_challenge_without_sitekey_unsolvable(self):
+        from webvac.captcha.extract import merge_dom_and_network
+        from webvac.captcha.network_watch import NetworkHint
+
+        page_url = "https://example.com/"
+        hints = [
+            NetworkHint(
+                family="challenge_page",
+                confidence=70.0,
+                signals=["network_cf_challenge"],
+            ),
+        ]
+        ranked = merge_dom_and_network([], hints, page_url=page_url)
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0].captcha_type, CaptchaType.CHALLENGE_PAGE)
+        self.assertFalse(ranked[0].solvable)
+
+    def test_challenge_dropped_when_solvable_exists(self):
+        from webvac.captcha.extract import merge_dom_and_network
+        from webvac.captcha.network_watch import NetworkHint
+
+        page_url = "https://example.com/"
+        dom = [
+            CaptchaInfo(
+                captcha_type=CaptchaType.TURNSTILE,
+                website_url=page_url,
+                website_key="0x4AAAAAAAwidget",
+                confidence=80.0,
+                signals=["dom_turnstile"],
+            ),
+        ]
+        hints = [
+            NetworkHint(family="challenge_page", confidence=70.0, signals=["network_cf_challenge"]),
+        ]
+        ranked = merge_dom_and_network(dom, hints, page_url=page_url)
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0].captcha_type, CaptchaType.TURNSTILE)
+        self.assertTrue(ranked[0].solvable)
+
+
+class TestVariantRemaps(unittest.TestCase):
+    def test_v2_remaps(self):
+        from webvac.captcha.extract import variant_remaps
+
+        info = CaptchaInfo(
+            captcha_type=CaptchaType.RECAPTCHA_V2,
+            website_url="https://example.com/",
+            website_key="6Lfkey",
+        )
+        types = {a.captcha_type for a in variant_remaps(info)}
+        self.assertIn(CaptchaType.RECAPTCHA_V2_INVISIBLE, types)
+        self.assertIn(CaptchaType.RECAPTCHA_V2_CALLBACK, types)
+        self.assertNotIn(CaptchaType.RECAPTCHA_V2, types)
+
+    def test_v3_enterprise_swap(self):
+        from webvac.captcha.extract import variant_remaps
+
+        info = CaptchaInfo(
+            captcha_type=CaptchaType.RECAPTCHA_V3,
+            website_url="https://example.com/",
+            website_key="6Lfkey",
+            page_action="submit",
+        )
+        alts = variant_remaps(info)
+        self.assertEqual(len(alts), 1)
+        self.assertEqual(alts[0].captcha_type, CaptchaType.RECAPTCHA_V3_ENTERPRISE)
+        self.assertTrue(alts[0].is_enterprise)
+
+    def test_type_mismatch_error(self):
+        from webvac.captcha.extract import is_type_mismatch_error
+
+        self.assertTrue(is_type_mismatch_error("InvalidRequestError: check captcha type"))
+        self.assertTrue(is_type_mismatch_error("ERROR: sitekey is not supported for this task"))
+        self.assertFalse(is_type_mismatch_error("timeout waiting for solution"))
+        self.assertFalse(is_type_mismatch_error(None))
+
+
 if __name__ == "__main__":
     unittest.main()
