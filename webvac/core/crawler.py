@@ -13,9 +13,7 @@ Changes over v1:
 """
 
 import asyncio
-import os
 import re
-import random
 import time
 import aiohttp
 from collections import deque
@@ -127,6 +125,7 @@ class Crawler:
         self.collector_engine = CollectorEngine() if self._vapt else None
         self.endpoint_graph: Optional[EndpointGraph] = None
         self._scan: Optional[ScanMetadata] = None
+        self.network_debug_dir: Optional[str] = None
         self._seed_url: Optional[str] = None
         self._partial_results: list[dict] = []
         self._proxy_lock = asyncio.Lock()
@@ -194,10 +193,6 @@ class Crawler:
     @_current_proxy.setter
     def _current_proxy(self, value: Optional[ProxyEntry]) -> None:
         self._slot_proxies[0] = value
-
-    @property
-    def origin_target(self) -> Optional[OriginTarget]:
-        return self._origin
 
     @property
     def partial_results(self) -> list[dict]:
@@ -491,6 +486,20 @@ class Crawler:
             profile=self.session_config.get("profile", "scrape"),
             mode="active" if self.session_config.get("active_recon") else "scrape",
         )
+        # Bind screenshots + network dumps into this scan's folder immediately
+        try:
+            from webvac.store.scan_session import ScanSession
+
+            sess = ScanSession(self.output_dir, self._scan)
+            sess.ensure_dirs()
+            layout = sess.layout_paths()
+            self.network_debug_dir = layout["network"]
+            if self.screenshot_module:
+                self.screenshot_module.set_screenshots_dir(layout["assets_screenshots"])
+            tqdm.write(f"[Crawler] Session output → {sess.session_dir}")
+        except Exception as exc:
+            self.network_debug_dir = None
+            tqdm.write(f"[Crawler] Session folder setup failed: {exc}")
         scope = CrawlScope(
             seed_url=seed_url,
             allowed_domains=target.allowed_domains,

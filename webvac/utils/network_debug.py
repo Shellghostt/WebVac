@@ -2,7 +2,7 @@
 network_debug.py — Persist scrape network listener dumps for failure diagnosis.
 
 Always-on (unless ``network_debug`` is False). Writes JSON under
-``{output_dir}/_network_debug/`` with a summary of failed/challenge requests
+``{scan_session}/network/`` with a summary of failed/challenge requests
 and classified challenge types (turnstile / recaptcha_v2 / managed_cf / …)
 so operators know when CapSolver can help.
 """
@@ -248,28 +248,35 @@ def summarize_entries(entries: list[dict[str, Any]]) -> dict[str, Any]:
 
 def dump_network_debug(
     *,
-    output_dir: str,
+    output_dir: str = "",
     page_url: str,
     reason: str,
     entries: list[dict[str, Any]],
     doc_status: Optional[int] = None,
     final_url: str = "",
     extra: Optional[dict[str, Any]] = None,
+    debug_dir: Optional[str] = None,
 ) -> Optional[str]:
     """
     Write a network debug JSON file. Returns path or None on failure.
+
+    Prefer ``debug_dir`` (scan-session ``network/``). Falls back to
+    ``{output_dir}/network`` when no session dir is bound.
     """
-    if not output_dir:
-        output_dir = "scraped_data"
-    debug_dir = os.path.join(output_dir, "_network_debug")
+    if debug_dir:
+        target_dir = debug_dir
+    else:
+        if not output_dir:
+            output_dir = "scraped_data"
+        target_dir = os.path.join(output_dir, "network")
     try:
-        os.makedirs(debug_dir, exist_ok=True)
+        os.makedirs(target_dir, exist_ok=True)
     except Exception:
         return None
 
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     host = _safe_host(page_url)
-    path = os.path.join(debug_dir, f"{host}_{ts}.json")
+    path = os.path.join(target_dir, f"{host}_{ts}.json")
     summary = summarize_entries(entries)
     payload = {
         "page_url": page_url,

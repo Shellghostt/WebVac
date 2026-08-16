@@ -135,7 +135,7 @@ sequenceDiagram
     F->>A: auth-wall check if authed
     F-->>C: page record dict
   end
-  S->>St: save formats + diffs
+  S->>St: save formats
   S->>B: stop
 ```
 
@@ -203,6 +203,7 @@ scraped_data/
     scans/
       <timestamp>_<scan_id>/
         scrape/       # data.json, data.csv, report.html, …
+        network/      # failure / challenge network dumps
         recon/        # VAPT (when enabled + wired)
         artifacts/    # VAPT raw artifacts
         assets/
@@ -212,8 +213,6 @@ scraped_data/
         meta/
           meta.json
           session.json
-    diffs/
-      diff_<scan>.json | .md
 ```
 
 Sessions (auth) live separately under `sessions/` (gitignored).
@@ -257,10 +256,10 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 | AuthManager (Patchright) | Active |
 | Session restore / TTL / Fernet | Active |
 | Mid-crawl auth-wall policy | Active |
-| Manual origin IP / Host bypass | Active |
+| Manual origin IP / Host bypass | Library-only (`session_config.origin_access`; no CLI) |
 | Network debug dumps on scrape failures | Active (default on) |
 | Bot detection + CAPTCHA prompt | Active |
-| Multi-format export + diffs | Active |
+| Multi-format export | Active |
 | PDF / sourcemap download | Active |
 | User `PipelineManager` | Active |
 | Collectors / analyzers / findings | Implemented, default OFF |
@@ -276,7 +275,7 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 3. **Slot isolation** — concurrency via contexts, not tabs in one profile.
 4. **Additive CLI** — new flags never break existing `--login` / `--session-file`.
 5. **Security gated** — VAPT and active probes stay opt-in.
-6. **Historical scans** — every run is a versioned session with optional diffs.
+6. **Historical scans** — every run is a versioned session folder under the target.
 
 ---
 

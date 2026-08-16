@@ -135,7 +135,7 @@ There is **no automatic origin discovery**. Operators must supply `--origin-ip` 
 
 ## 6. Network debug
 
-On scrape failures or bot/challenge detection, `utils/network_debug.py` writes JSON summaries under `{output_dir}/_network_debug/`. Controlled by session config:
+On scrape failures or bot/challenge detection, `utils/network_debug.py` writes JSON summaries under `{scan_session}/network/`. Controlled by session config:
 
 - `network_debug` (default `True`) — enable dumps on failures  
 - `network_debug_always` (default `False`) — dump on every page  

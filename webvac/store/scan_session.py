@@ -9,12 +9,12 @@ Layout:
                     scrape/     report.html, data.json, ...
                     recon/      findings, intelligence, recon reports
                     artifacts/  artifacts.json
+                    network/    per-page network debug dumps
                     assets/
                         pdfs/
                         sourcemaps/
                         screenshots/
                     meta/       session.json, meta.json
-            diffs/
 """
 
 from __future__ import annotations
@@ -53,7 +53,6 @@ class ScanSession:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_name = f"{ts}_{self.scan_id[:8]}"
         self.session_dir = os.path.join(self.target_dir, "scans", self.session_name)
-        self.diffs_dir = os.path.join(self.target_dir, "diffs")
 
     def layout_paths(self) -> dict[str, str]:
         base = self.session_dir
@@ -62,6 +61,7 @@ class ScanSession:
             "scrape": os.path.join(base, "scrape"),
             "recon": os.path.join(base, "recon"),
             "artifacts": os.path.join(base, "artifacts"),
+            "network": os.path.join(base, "network"),
             "assets_pdfs": os.path.join(base, "assets", "pdfs"),
             "assets_sourcemaps": os.path.join(base, "assets", "sourcemaps"),
             "assets_screenshots": os.path.join(base, "assets", "screenshots"),
@@ -69,7 +69,6 @@ class ScanSession:
         }
 
     def ensure_dirs(self) -> None:
-        os.makedirs(self.diffs_dir, exist_ok=True)
         for path in self.layout_paths().values():
             os.makedirs(path, exist_ok=True)
 
@@ -118,6 +117,7 @@ class ScanSession:
                 "scrape": "scrape/",
                 "recon": "recon/",
                 "artifacts": "artifacts/",
+                "network": "network/",
                 "assets": "assets/",
                 "meta": "meta/",
             },

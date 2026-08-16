@@ -1,7 +1,7 @@
 """
 storage.py — Save scraped data to JSON, CSV, Markdown, SQLite, and HTML.
 
-Folder structure (v2.2 historical layout):
+Folder structure:
 
     scraped_data/
         <domain>_<target_id>/
@@ -10,10 +10,9 @@ Folder structure (v2.2 historical layout):
                     scrape/     report.html, data.json, ...
                     recon/      findings, intelligence, recon reports
                     artifacts/  artifacts.json
+                    network/    network debug dumps
                     assets/     pdfs/, sourcemaps/, screenshots/
                     meta/       session.json, meta.json
-            diffs/
-                diff_<session_name>.json
 
 Legacy fallback (no scan metadata): scraped_data/<slug>/<timestamp>/
 """
@@ -67,7 +66,7 @@ class Storage:
             print("[Storage] No data to save.")
             return {}
 
-        formats = formats or (["json", "csv", "html"] if data else [])
+        formats = formats or (["json", "html"] if data else [])
         slug = label or (self._url_slug(data[0].get("url", "scrape")) if data else (scan.target.domain if scan else "scrape"))
         report_ts_fmt = self._report_ts_fmt(scan)
 
@@ -80,8 +79,6 @@ class Storage:
             recon_dir = layout["recon"]
             meta_dir = layout["meta"]
             artifacts_dir = layout["artifacts"]
-            site_dir = session.target_dir
-            diffs_dir = session.diffs_dir
             session_key = session.session_name
             paths: dict[str, str] = {
                 "meta": session.write_meta(
@@ -92,21 +89,13 @@ class Storage:
             }
         else:
             session_key = datetime.now().strftime("%Y%m%d_%H%M%S")
-            site_dir = os.path.join(self.output_dir, slug)
-            session_dir = os.path.join(site_dir, session_key)
+            session_dir = os.path.join(self.output_dir, slug, session_key)
             scrape_dir = session_dir
             recon_dir = session_dir
             meta_dir = session_dir
             artifacts_dir = session_dir
-            diffs_dir = os.path.join(site_dir, "diffs")
             os.makedirs(session_dir, exist_ok=True)
-            os.makedirs(diffs_dir, exist_ok=True)
             paths = {}
-
-        self._generate_diff(
-            data or [], slug, session_key, site_dir, diffs_dir,
-            recon=recon, report_ts_fmt=report_ts_fmt,
-        )
 
         _writers = {
             "json":     lambda d, _: self._save_json(d, scrape_dir),
@@ -1223,288 +1212,3 @@ class Storage:
         <a href="../recon/recon_report.html" target="_blank">Open Full Recon Report →</a>
       </div>"""
 
-    def _list_prior_sessions(self, site_dir: str, current_key: str) -> list[str]:
-        if not os.path.isdir(site_dir):
-            return []
-        scans_root = os.path.join(site_dir, "scans")
-        if os.path.isdir(scans_root):
-            sessions = [
-                name
-                for name in os.listdir(scans_root)
-                if name != current_key
-                and os.path.isdir(os.path.join(scans_root, name))
-            ]
-            base = scans_root
-        else:
-            sessions = [
-                name
-                for name in os.listdir(site_dir)
-                if name != current_key
-                and name != "diffs"
-                and os.path.isdir(os.path.join(site_dir, name))
-            ]
-            base = site_dir
-
-        def _started_at(session_name: str) -> str:
-            for rel in ("meta/meta.json", "meta.json", "meta/session.json", "session.json"):
-                path = os.path.join(base, session_name, rel)
-                if not os.path.isfile(path):
-                    continue
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        data = json.load(f)
-                    if rel.endswith("meta.json"):
-                        return data.get("started_at", session_name)
-                    return (data.get("session") or {}).get("started_at", session_name)
-                except Exception:
-                    pass
-            return session_name
-
-        sessions.sort(key=_started_at)
-        return sessions
-
-    def _generate_diff(
-        self,
-        current_data: list[dict],
-        slug: str,
-        session_key: str,
-        site_dir: str,
-        diffs_dir: str,
-        recon: Optional[dict[str, Any]] = None,
-        report_ts_fmt: str = "",
-    ) -> None:
-        """
-        Compare against the most recent prior session under site_dir (target or slug).
-        """
-        history_sessions = self._list_prior_sessions(site_dir, session_key)
-
-        display_time = report_ts_fmt or session_key
-        diff_json_path = os.path.join(diffs_dir, f"diff_{session_key}.json")
-        diff_md_path   = os.path.join(diffs_dir, f"diff_{session_key}.md")
-
-        curr_total   = len(current_data)
-        curr_success = sum(1 for p in current_data if p.get("status", "success") == "success")
-        curr_failed  = curr_total - curr_success
-
-        if not history_sessions:
-            report = {
-                "site": slug, "scan_id": session_key, "scan_time": display_time, "first_run": True,
-                "summary": {"total_pages": curr_total, "success": curr_success, "failed": curr_failed},
-            }
-            if recon:
-                report["recon"] = self._recon_diff_summary(recon)
-            with open(diff_json_path, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-
-            md = f"""# WebVac Scan Diff — `{slug}`
-
-*Generated on {display_time} (Initial Run)*
-
-## Scan Overview
-
-* **Total Pages Scraped**: `{curr_total}`
-* **Success**: `{curr_success}`
-* **Failed/Blocked**: `{curr_failed}`
-
-> [!NOTE]
-> No previous scan history found for `{slug}`. Differences will appear on subsequent scans.
-"""
-            with open(diff_md_path, "w", encoding="utf-8") as f:
-                f.write(md)
-            return
-
-        # Load previous session's data.json
-        prev_session = history_sessions[-1]
-        scans_root = os.path.join(site_dir, "scans")
-        if os.path.isdir(scans_root):
-            prev_json = os.path.join(scans_root, prev_session, "scrape", "data.json")
-            prev_recon_base = os.path.join(scans_root, prev_session, "recon")
-        else:
-            prev_json = os.path.join(site_dir, prev_session, "data.json")
-            prev_recon_base = os.path.join(site_dir, prev_session)
-        try:
-            with open(prev_json, encoding="utf-8") as f:
-                prev_data = json.load(f)
-        except Exception as exc:
-            print(f"[Diff] [Warning] Failed to read previous session {prev_session}: {exc}")
-            return
-
-        prev_total   = len(prev_data)
-        prev_success = sum(1 for p in prev_data if p.get("status", "success") == "success")
-        prev_failed  = prev_total - prev_success
-
-        prev_map = {p["url"]: p for p in prev_data if "url" in p}
-        curr_map = {p["url"]: p for p in current_data if "url" in p}
-        prev_urls = set(prev_map.keys())
-        curr_urls = set(curr_map.keys())
-
-        added_urls   = curr_urls - prev_urls
-        removed_urls = prev_urls - curr_urls
-        common_urls  = curr_urls & prev_urls
-
-        modified = []
-        for url in common_urls:
-            curr_p = curr_map[url]
-            prev_p = prev_map[url]
-            changes = []
-            c_status = curr_p.get("status", "success")
-            p_status = prev_p.get("status", "success")
-            if c_status != p_status:
-                changes.append(f"Status changed from '{p_status}' to '{c_status}'")
-            c_title = curr_p.get("title", "")
-            p_title = prev_p.get("title", "")
-            if c_title != p_title and c_status == p_status == "success":
-                changes.append(f"Title changed from '{p_title}' to '{c_title}'")
-            c_words = curr_p.get("word_count", 0)
-            p_words = prev_p.get("word_count", 0)
-            if abs(c_words - p_words) > max(10, p_words * 0.1) and c_status == p_status == "success":
-                changes.append(f"Word count changed from {p_words} to {c_words}")
-            if changes:
-                modified.append({"url": url, "changes": changes})
-
-        failures = [
-            {"url": url, "error": curr_map[url].get("error", "Unknown")}
-            for url in curr_urls if curr_map[url].get("status") == "failed"
-        ]
-
-        report = {
-            "site": slug, "scan_id": session_key, "scan_time": display_time, "first_run": False,
-            "previous_scan": {"session": prev_session, "total_pages": prev_total, "success": prev_success, "failed": prev_failed},
-            "current_scan":  {"total_pages": curr_total, "success": curr_success, "failed": curr_failed},
-            "diff": {
-                "added_count": len(added_urls), "removed_count": len(removed_urls),
-                "modified_count": len(modified),
-                "added": list(added_urls), "removed": list(removed_urls),
-                "modified": modified, "failures": failures,
-            },
-        }
-        if recon:
-            report["recon"] = self._recon_diff_summary(recon)
-            for rel in ("findings.json", "recon.json"):
-                prev_path = os.path.join(prev_recon_base, rel)
-                if not os.path.isfile(prev_path):
-                    continue
-                try:
-                    with open(prev_path, encoding="utf-8") as f:
-                        prev_data = json.load(f)
-                    if rel == "findings.json":
-                        report["recon_diff"] = self._compare_findings_lists(
-                            recon.get("findings", []), prev_data
-                        )
-                    else:
-                        report["recon_diff"] = self._compare_recon(recon, prev_data)
-                    break
-                except Exception:
-                    pass
-        with open(diff_json_path, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2)
-
-        def delta(c, p):
-            d = c - p
-            return f"+{d}" if d > 0 else str(d)
-
-        added_list   = "\n".join(f"  - [{u}]({u})" for u in sorted(added_urls))   or "  - *None*"
-        removed_list = "\n".join(f"  - [{u}]({u})" for u in sorted(removed_urls)) or "  - *None*"
-        mod_lines    = [f"  - [{m['url']}]({m['url']}):\n" + "\n".join(f"    * {c}" for c in m["changes"]) for m in modified]
-        modified_list = "\n".join(mod_lines) or "  - *None*"
-        fail_lines   = [f"  - [{f['url']}]({f['url']}) — `{f['error']}`" for f in failures]
-        failed_list  = "\n".join(fail_lines) or "  - *None*"
-
-        recon_section = ""
-        if recon and report.get("recon_diff"):
-            rd = report["recon_diff"]
-            recon_section = f"""
-## Recon Changes
-
-* **New findings**: {len(rd.get('new_findings', []))}
-* **Resolved findings**: {len(rd.get('resolved_findings', []))}
-* **Findings count delta**: {rd.get('findings_delta', {})}
-"""
-            if rd.get("new_findings"):
-                recon_section += "\n**New:**\n" + "\n".join(
-                    f"  - {f}" for f in rd["new_findings"][:20]
-                )
-
-        md = f"""# WebVac Scan Diff — `{slug}`
-
-*Generated on {display_time}*
-
-## Scan Overview
-
-| Metric | Previous (`{prev_session}`) | Current | Change |
-|---|---|---|---|
-| **Total Pages** | {prev_total} | {curr_total} | {delta(curr_total, prev_total)} |
-| **Success** | {prev_success} | {curr_success} | {delta(curr_success, prev_success)} |
-| **Failed/Blocked** | {prev_failed} | {curr_failed} | {delta(curr_failed, prev_failed)} |
-
-## Changes
-
-* **Added Pages ({len(added_urls)})**:
-{added_list}
-
-* **Removed Pages ({len(removed_urls)})**:
-{removed_list}
-
-* **Modified Pages ({len(modified)})**:
-{modified_list}
-
-## Current Failures & Blocks ({len(failures)})
-
-{failed_list}
-{recon_section}
-"""
-        with open(diff_md_path, "w", encoding="utf-8") as f:
-            f.write(md)
-
-        print(f"\n[Diff] Compared against session {prev_session}:")
-        print(f"  Added     : {len(added_urls)} page(s)")
-        print(f"  Removed   : {len(removed_urls)} page(s)")
-        print(f"  Modified  : {len(modified)} page(s)")
-        print(f"  Failures  : {len(failures)} page(s)")
-        if recon and report.get("recon_diff"):
-            rd = report["recon_diff"]
-            print(f"  Recon     : +{len(rd.get('new_findings', []))} new findings, -{len(rd.get('resolved_findings', []))} resolved")
-        print(f"  Report    -> {os.path.relpath(diff_md_path)}")
-
-    @staticmethod
-    def _compare_findings_lists(current: list, previous: list) -> dict:
-        cur_fc: dict[str, int] = {}
-        prev_fc: dict[str, int] = {}
-        for f in current:
-            sev = f.get("severity", "info")
-            cur_fc[sev] = cur_fc.get(sev, 0) + 1
-        for f in previous:
-            sev = f.get("severity", "info")
-            prev_fc[sev] = prev_fc.get(sev, 0) + 1
-        return Storage._compare_recon(
-            {"findings": current, "findings_count": cur_fc},
-            {"findings": previous, "findings_count": prev_fc},
-        )
-
-    @staticmethod
-    def _recon_diff_summary(recon: dict[str, Any]) -> dict:
-        findings = recon.get("findings") or []
-        return {
-            "findings_count": recon.get("findings_count", {}),
-            "observations_count": recon.get("observations_count", 0),
-            "finding_titles": sorted(f.get("title", "") for f in findings),
-            "mode": recon.get("session", {}).get("mode", "passive"),
-        }
-
-    @staticmethod
-    def _compare_recon(current: dict, previous: dict) -> dict:
-        cur_findings = {f.get("title") for f in current.get("findings", []) if f.get("title")}
-        prev_findings = {f.get("title") for f in previous.get("findings", []) if f.get("title")}
-        new_f = sorted(cur_findings - prev_findings)
-        resolved = sorted(prev_findings - cur_findings)
-        cur_fc = current.get("findings_count") or {}
-        prev_fc = previous.get("findings_count") or {}
-        delta = {
-            k: cur_fc.get(k, 0) - prev_fc.get(k, 0)
-            for k in set(cur_fc) | set(prev_fc)
-        }
-        return {
-            "new_findings": new_f,
-            "resolved_findings": resolved,
-            "findings_delta": delta,
-        }

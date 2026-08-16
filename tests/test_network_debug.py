@@ -88,6 +88,7 @@ class TestNetworkDebug(unittest.TestCase):
             )
             self.assertIsNotNone(path)
             self.assertTrue(os.path.isfile(path))
+            self.assertIn(os.path.join("network"), path.replace("/", os.sep))
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             self.assertEqual(data["reason"], "bot_detected")

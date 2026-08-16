@@ -2,20 +2,13 @@
 screenshot.py — CAPTCHA-page screenshot module.
 
 Captures a full-page screenshot ONLY when a bot-block / CAPTCHA page is
-detected — not on every page. Screenshots are saved as PNG files under
-<output_dir>/screenshots/.
-
-Usage::
-
-    module = ScreenshotModule(output_dir="scraped_data")
-    path = await module.capture_if_blocked(page, url)
-    # path is a relative string like "scraped_data/screenshots/example_com_20260603_123456.png"
-    # or None if the page was not blocked.
+detected — not on every page. Prefer binding to the active scan session's
+``assets/screenshots/`` via ``set_screenshots_dir``; otherwise falls back to
+``<output_dir>/screenshots/``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 from datetime import datetime, timezone
@@ -46,6 +39,11 @@ class ScreenshotModule:
         self.full_page = full_page
         self._screenshots_path = os.path.join(output_dir, screenshots_subdir)
 
+    def set_screenshots_dir(self, path: str) -> None:
+        """Point captures at a scan-session folder (e.g. assets/screenshots)."""
+        if path:
+            self._screenshots_path = path
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def capture_if_blocked(
@@ -58,14 +56,6 @@ class ScreenshotModule:
         Detect whether the page is a CAPTCHA / bot-block page.
         If yes, capture a full-page screenshot and return the file path.
         If no, return None.
-
-        Args:
-            page:     A Patchright ``Page`` object (already loaded).
-            url:      The original requested URL (used for filename generation).
-            response: The ``Response`` from ``page.goto()``, or None.
-
-        Returns:
-            Relative file path string if a screenshot was saved, else None.
         """
         try:
             blocked = await is_bot_detected(page, response)
@@ -78,18 +68,13 @@ class ScreenshotModule:
         return await self._capture(page, url)
 
     async def capture_forced(self, page, url: str) -> Optional[str]:
-        """
-        Unconditionally capture a screenshot regardless of detection.
-        Useful for debugging / manual invocation.
-        """
+        """Unconditionally capture a screenshot regardless of detection."""
         return await self._capture(page, url)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
     async def _capture(self, page, url: str) -> Optional[str]:
-        """
-        Internal: ensure directory exists, build filename, take screenshot.
-        """
+        """Internal: ensure directory exists, build filename, take screenshot."""
         try:
             os.makedirs(self._screenshots_path, exist_ok=True)
             filename = self._build_filename(url)
@@ -116,9 +101,7 @@ class ScreenshotModule:
             https://example.com/login?foo=bar  →  example_com_login_20260603_153012.png
         """
         parsed = urlparse(url)
-        # Combine netloc + path, strip leading/trailing slashes
         raw = f"{parsed.netloc}{parsed.path}".strip("/")
-        # Replace any non-alphanumeric character with underscore
         safe = re.sub(r"[^a-zA-Z0-9]+", "_", raw).strip("_")[:80]
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         return f"{safe}_{ts}.png"

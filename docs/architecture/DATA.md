@@ -63,9 +63,9 @@ flowchart TD
 flowchart TB
   Root[scraped_data] --> Target["target folder domain_id"]
   Target --> Scans[scans/]
-  Target --> Diffs[diffs/]
   Scans --> Scan["timestamp_scanid/"]
   Scan --> Scrape[scrape/]
+  Scan --> Network[network/]
   Scan --> Meta[meta/]
   Scan --> Assets[assets/]
   Scan --> Recon[recon/]
@@ -89,7 +89,7 @@ flowchart TB
 | SQLite | `scrape/data.sqlite` |
 | all | union of above |
 
-After save, Storage can generate **diffs** vs the previous scan under `diffs/`.
+Screenshots land in `assets/screenshots/`; network failure dumps in `network/`.
 
 ---
 
