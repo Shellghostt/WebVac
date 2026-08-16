@@ -7,7 +7,7 @@ DEFAULT_CONFIG = {
     # Browser
     "headless": True,
     "timeout": 45000,            # ms to wait for page load
-    "wait_until": "domcontentloaded", # domcontentloaded | load | networkidle
+    "wait_until": "load",  # domcontentloaded | load | networkidle
     "challenge_wait_ms": 45000,  # ms to wait for CF/JS challenges to resolve
     "scroll_max_steps": 30,      # cap lazy-scroll iterations per page
     "user_agent": (
@@ -31,7 +31,7 @@ DEFAULT_CONFIG = {
     "captcha_poll_interval_sec": 2.0,
     "captcha_solver_retries": 2,
     "captcha_use_proxy": False,
-    "captcha_fallback_manual": True,
+    "captcha_fallback_manual": False,
 
     # Politeness delays (seconds)
     "delay_min": 1.0,
@@ -58,8 +58,8 @@ DEFAULT_CONFIG = {
     # Must return JSON with an "origin" or "ip" key.
     "health_check_url": "http://api.ipify.org/?format=json",
 
-    # robots.txt — set to False to disable entirely
-    "respect_robots": True,
+    # robots.txt is bypassed by default via CLI --no-robots
+    # (kept here only as documentation of intent; scraper uses argparse)
 
     # Concurrent pages to scrape at once (1 = sequential, backward-compatible)
     "concurrency": 1,
@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
     "output_dir": "scraped_data",
 
     # Comma-separated output formats: json, csv, markdown, sqlite, html, all
-    "output_formats": "json,csv,html",
+    "output_formats": "json,html",
 
     # Stealth / Anti-detection settings
     # Locale and Accept-Language always forced to US English
@@ -102,8 +102,7 @@ DEFAULT_CONFIG = {
     "typing_delay": 80,          # ms between keystrokes
     "field_delay": 0.5,          # seconds to pause between auth fields
 
-    # Screenshot settings (CAPTCHA / bot-block pages only)
-    "screenshot_on_block": True,
+    # Screenshot settings (CAPTCHA / bot-block pages only; CLI --no-screenshots to disable)
     "screenshots_subdir": "screenshots",
 
     # VAPT pipeline — disabled until re-enabled from scraper
@@ -154,10 +153,8 @@ DEFAULT_CONFIG = {
         "concurrency": 5,
     },
 
-    # Origin bypass (manual IP)
-    "origin_access": None,  # OriginTarget dict at runtime
-    "skip_origin_validate": False,
-    "origin_title": "",
+    # Origin bypass (optional OriginTarget dict via session_config — no CLI flag)
+    "origin_access": None,
     "network_debug": True,
     "network_debug_always": False,
 

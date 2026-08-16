@@ -33,7 +33,6 @@ _OK = Fore.LIGHTGREEN_EX
 _ERR = Fore.LIGHTRED_EX
 _W = Fore.WHITE
 _RST = Style.RESET_ALL
-_DIM = Style.DIM
 _BRIGHT = Style.BRIGHT
 
 _UI_WIDTH = 68
@@ -391,30 +390,6 @@ def _list_candidate_files(
     return found
 
 
-def select_proxy_file() -> Optional[str]:
-    _hint("Format: one proxy per line — http://host:port or http://host:port|user|pass")
-    _hint(f"Template: {EXAMPLES_DIR}/proxies.example.txt  →  copy to proxies.txt")
-    txt_files = _list_candidate_files(
-        suffixes=(".txt",),
-        name_excludes=("requirements",),
-    )
-    choices = ["Enter custom file path", "No proxy (direct connection)"] + txt_files
-    default_idx = 0
-    for i, c in enumerate(choices):
-        if c.endswith("proxies.example.txt") or c == "proxies.txt":
-            default_idx = i
-            break
-    choice = prompt_choice("Select a proxy file", choices, default_idx=default_idx)
-    if choice == "No proxy (direct connection)":
-        return None
-    if choice == "Enter custom file path":
-        return prompt_string(
-            "Path to proxy file",
-            os.path.join(EXAMPLES_DIR, "proxies.example.txt"),
-        )
-    return choice
-
-
 def select_session_file(*, default: str = "") -> Optional[str]:
     _hint("Preferred: Playwright storage_state JSON (cookies + origins)")
     _hint(f"Templates: {EXAMPLES_DIR}/session.example.json  |  session_cookies_legacy.example.json")
@@ -439,25 +414,6 @@ def select_session_file(*, default: str = "") -> Optional[str]:
     choice = prompt_choice("Select session file", choices, default_idx=default_idx)
     if choice == "Enter custom file path":
         return prompt_string("Path to session JSON file", default_path)
-    return choice
-
-
-def select_pipeline_file() -> Optional[str]:
-    _hint("Python file with PIPELINES = [...] or process_item(item)")
-    _hint(f"Template: {EXAMPLES_DIR}/pipeline.example.py")
-    files = _list_candidate_files(
-        suffixes=(".py",),
-        name_contains="pipeline",
-    )
-    choices = ["Skip (no pipeline)", "Enter custom file path"] + files
-    choice = prompt_choice("Use a custom data pipeline?", choices, default_idx=0)
-    if choice.startswith("Skip"):
-        return None
-    if choice == "Enter custom file path":
-        return prompt_string(
-            "Path to pipeline Python file",
-            os.path.join(EXAMPLES_DIR, "pipeline.example.py"),
-        )
     return choice
 
 
@@ -540,14 +496,14 @@ def main():
         print_banner()
         print_menu([
             ("1", "Quick scrape", "Single page — fast extract & report"),
-            ("2", "Site crawler", "BFS crawl — depth, limits, concurrency"),
-            ("3", "Scan library", "Browse scraped_data / diffs / reports"),
+            ("2", "Site crawler", "BFS crawl — page limits & concurrency"),
+            ("3", "Scan library", "Browse scraped_data / scans / reports"),
             ("4", "Quit", "Exit the launcher"),
         ])
 
         action = prompt_choice(
             "What would you like to do?",
-            ["Single Page", "Website Crawler", "View Diff Folder", "Quit"],
+            ["Single Page", "Website Crawler", "Scan library", "Quit"],
             0,
         )
 
@@ -556,7 +512,7 @@ def main():
             print(f"  {_OK}Thanks for using WebVac.{_RST} {_M}See you next crawl.{_RST}\n")
             break
 
-        if action == "View Diff Folder":
+        if action == "Scan library":
             section("Scan library")
             base = "scraped_data"
             if not os.path.exists(base):
@@ -567,7 +523,8 @@ def main():
                     target_path = os.path.join(base, target_dir)
                     if not os.path.isdir(target_path):
                         continue
-                    diffs = os.path.join(target_path, "diffs")
+                    if target_dir.startswith("_") or target_dir in ("screenshots", "network"):
+                        continue
                     scans_root = os.path.join(target_path, "scans")
                     scan_count = 0
                     if os.path.isdir(scans_root):
@@ -577,19 +534,16 @@ def main():
                         ])
                     _blank()
                     print(f"  {_B}{_BRIGHT}{target_dir}{_RST}  {_M}{scan_count} scan(s){_RST}")
-                    if os.path.isdir(diffs):
-                        diff_files = sorted(os.listdir(diffs))
-                        if diff_files:
-                            print(f"    {_M}diffs/{_RST} {_C}{len(diff_files)} file(s){_RST}")
-                            for f in diff_files[-5:]:
-                                print(f"      {_M}·{_RST} {f}")
-                        else:
-                            print(f"    {_M}diffs/ (empty){_RST}")
                     if os.path.isdir(scans_root):
-                        latest = sorted(os.listdir(scans_root))[-3:]
+                        latest = sorted(
+                            d for d in os.listdir(scans_root)
+                            if os.path.isdir(os.path.join(scans_root, d))
+                        )[-3:]
                         for s in latest:
                             print(f"    {_OK}scans/{s}/{_RST}")
-                            print(f"      {_M}scrape/report.html · assets/pdfs/{_RST}")
+                            print(
+                                f"      {_M}scrape/ · network/ · assets/screenshots/{_RST}"
+                            )
             _blank()
             input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
             continue
@@ -713,12 +667,11 @@ def main():
             ui_info("Single-page mode")
         else:
             cmd_args += ["--mode", "crawl"]
-            depth = prompt_string("Max crawl depth", "3")
             max_pages_input = prompt_string(
                 "Max pages to scrape [Enter for UNLIMITED ∞ full site crawl]", ""
             )
             concurrency = prompt_string("Parallel concurrency workers", "1")
-            cmd_args += ["--depth", depth, "--concurrency", concurrency]
+            cmd_args += ["--concurrency", concurrency]
 
             if max_pages_input and max_pages_input.strip().isdigit():
                 cmd_args += ["--max-pages", max_pages_input.strip()]
@@ -740,127 +693,14 @@ def main():
                 ui_warn("Unlimited mode — crawls until the BFS queue is empty.")
                 ui_info("ETA depends on site size.")
 
-        section("Output")
-        fmt_choice = prompt_choice(
-            "Select Output formats",
-            [
-                "JSON, CSV & HTML Report (Default)",
-                "All formats (JSON, CSV, Markdown, SQLite, HTML)",
-                "HTML Report only",
-                "JSON & CSV only",
-                "JSON only",
-                "CSV only",
-                "Markdown only",
-                "SQLite only",
-            ],
-            0,
-        )
-        fmt_map = {
-            "JSON, CSV & HTML Report (Default)": "json,csv,html",
-            "All formats (JSON, CSV, Markdown, SQLite, HTML)": "all",
-            "HTML Report only": "html",
-            "JSON & CSV only": "json,csv",
-            "JSON only": "json",
-            "CSV only": "csv",
-            "Markdown only": "markdown",
-            "SQLite only": "sqlite",
-        }
-        cmd_args += ["--format", fmt_map[fmt_choice]]
-
-        section("Politeness & loading")
-        robots_choice = prompt_choice(
-            "How to handle robots.txt?",
-            [
-                "Respect rules & Crawl-delay (Polite)",
-                "Bypass robots.txt completely (Use responsibly)",
-                "Respect rules but ignore Crawl-delay",
-            ],
-            0,
-        )
-        if robots_choice == "Bypass robots.txt completely (Use responsibly)":
-            cmd_args.append("--no-robots")
-        elif robots_choice == "Respect rules but ignore Crawl-delay":
-            cmd_args.append("--ignore-crawl-delay")
-
-        wait_choice = prompt_choice(
-            "Page loading wait strategy",
-            [
-                "domcontentloaded (Recommended: fast, avoids dynamic connection timeouts)",
-                "networkidle (Wait until full network traffic settles)",
-                "load (Standard document load)",
-            ],
-            0,
-        )
-        wait_map = {
-            "domcontentloaded (Recommended: fast, avoids dynamic connection timeouts)": "domcontentloaded",
-            "networkidle (Wait until full network traffic settles)": "networkidle",
-            "load (Standard document load)": "load",
-        }
-        cmd_args += ["--wait-until", wait_map[wait_choice]]
-
-        section("Network")
-        origin_mode = prompt_choice(
-            "Origin IP bypass?",
-            ["No (default)", "Enter origin IP (--origin-ip)"],
-            0,
-        )
-        if origin_mode.startswith("Enter origin"):
-            oip = prompt_string("Origin IP address")
-            if oip:
-                cmd_args += ["--origin-ip", oip]
-                title = prompt_string(
-                    "Expected HTML title for validation (enter to auto-detect)",
-                    "",
-                )
-                if title:
-                    cmd_args += ["--origin-title", title]
-                skip_val = prompt_choice(
-                    "Skip title validation?",
-                    ["No (safer)", "Yes (--skip-origin-validate)"],
-                    0,
-                )
-                if skip_val.startswith("Yes"):
-                    cmd_args.append("--skip-origin-validate")
-
-        use_proxy = prompt_choice(
-            "Do you want to use proxies?",
-            ["No (Direct Connection)", "Yes, from a file pool (--proxy-file)"],
-            0,
-        )
-        if use_proxy.startswith("Yes"):
-            p_file = select_proxy_file()
-            if p_file:
-                cmd_args += ["--proxy-file", p_file]
-                playbook = prompt_choice(
-                    "Proxy playbook",
-                    [
-                        "residential (sticky=25, UA+geo+tz pin) — Recommended for ISP proxies",
-                        "datacenter (sticky=5, round-robin)",
-                        "none (manual sticky / strategy)",
-                    ],
-                    0,
-                )
-                if playbook.startswith("residential"):
-                    cmd_args += ["--proxy-playbook", "residential"]
-                elif playbook.startswith("datacenter"):
-                    cmd_args += ["--proxy-playbook", "datacenter"]
-                else:
-                    strategy = prompt_choice(
-                        "Proxy selection strategy",
-                        ["latency (Recommended)", "random", "round_robin"],
-                        0,
-                    )
-                    strategy_val = "latency" if "latency" in strategy else strategy
-                    cmd_args += ["--proxy-strategy", strategy_val]
-                    sticky = prompt_string(
-                        "Sticky requests per proxy before rotate (0 = every request)", "10"
-                    )
-                    if sticky and sticky.isdigit():
-                        cmd_args += ["--sticky-requests", sticky]
-
-        pipe = select_pipeline_file()
-        if pipe:
-            cmd_args += ["--pipeline-file", pipe]
+        # Fixed defaults (no prompts): json+html, bypass robots, wait=load, proxies.txt pool
+        cmd_args += ["--format", "json,html", "--no-robots", "--wait-until", "load"]
+        proxy_path = os.path.join(os.getcwd(), "proxies.txt")
+        if os.path.isfile(proxy_path):
+            cmd_args += ["--proxy-file", proxy_path]
+            ui_info(f"Proxy pool: {proxy_path}")
+        else:
+            ui_warn("No proxies.txt found — using direct connection.")
 
         section("Browser")
         vapt_choice = prompt_choice(
@@ -886,8 +726,8 @@ def main():
         headless_choice = prompt_choice(
             "Run browser in headless mode?",
             [
-                "Yes (Invisible background, fastest)",
-                "No (Visible headed window, useful to debug login / captchas)",
+                "Yes (Invisible background — CapSolver still works)",
+                "No (Visible headed window, useful to debug login / UI)",
             ],
             0,
         )
@@ -904,12 +744,12 @@ def main():
             if pause_consent.startswith("Yes"):
                 cmd_args.append("--pause-for-consent")
         else:
-            ui_info("Headless mode — auto-dismiss CMP on every page")
+            ui_info("Headless mode — CapSolver auto-solves CAPTCHAs when capsolver.key is present")
 
         screenshot_choice = prompt_choice(
             "Capture screenshots of CAPTCHA / bot-blocked pages?",
             [
-                "Yes (save PNG to scraped_data/screenshots/)",
+                "Yes (save PNG under the scan's assets/screenshots/)",
                 "No (disable screenshots)",
             ],
             0,

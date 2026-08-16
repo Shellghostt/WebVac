@@ -20,24 +20,16 @@ Usage examples:
   # Visible browser (not headless) for debugging
   python -m webvac --url https://example.com --mode single --no-headless
 
-  # Use a proxy list file
-  python -m webvac --url https://example.com --mode crawl --proxy-file proxies.txt
+  # Proxies: omit --proxy-file to auto-use ./proxies.txt when present
+  python -m webvac --url https://example.com --mode crawl
 
-  # Inline proxies (comma-separated; format: server or server|user|pass)
-  python -m webvac --url https://example.com --proxies "http://1.2.3.4:8080,http://5.6.7.8:3128"
-
-  # Disable robots.txt checks (use responsibly)
-  python -m webvac --url https://example.com --no-robots
-
-  # Obey robots.txt allow/deny but ignore its Crawl-delay directive
-  python -m webvac --url https://example.com --ignore-crawl-delay
+  # robots.txt is bypassed by default; opt in with --respect-robots
+  python -m webvac --url https://example.com --respect-robots
 """
 
 import asyncio
 import argparse
 import os
-import sys
-from typing import Optional
 
 from colorama import init, Fore, Style
 from webvac.utils.browser import BrowserManager
@@ -52,8 +44,6 @@ from webvac.utils.screenshot import ScreenshotModule
 from webvac.core.pipeline import PipelineManager
 from webvac.store.scan_session import ScanSession
 from webvac.utils.asset_downloader import AssetDownloader, collect_pdf_urls
-from webvac.models.origin import OriginTarget
-from webvac.utils.origin_probe import validate_origin, fetch_vanity_title
 from webvac.utils.browser_pool import SlotIdentity
 from urllib.parse import urlparse
 
@@ -98,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--wait-until",
         choices=["domcontentloaded", "load", "networkidle"],
         default=DEFAULT_CONFIG["wait_until"],
-        help="Patchright lifecycle event to wait for on page load. (default: domcontentloaded)",
+        help="Patchright lifecycle event to wait for on page load. (default: load)",
     )
 
     # Login / Auth
@@ -162,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Session TTL in seconds (0 = never expire). Checked on restore.",
     )
     p.add_argument(
+        "--otp-prompt",
+        action="store_true",
+        default=False,
+        help="Prompt for OTP/MFA when an OTP field appears during login.",
+    )
+    p.add_argument(
         "--auth-profile",
         default=None,
         metavar="FILE",
@@ -223,7 +219,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help=(
             "Path to a proxy list file. One proxy per line, format: "
-            "server  OR  server|username|password. Lines starting with # are ignored."
+            "server  OR  server|username|password. Lines starting with # are ignored. "
+            "If omitted, uses ./proxies.txt when that file exists."
         ),
     )
     p.add_argument(
@@ -338,20 +335,30 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--pipeline-file",
         default=None,
-        help="Path to a Python file containing data cleaning pipelines.",
+        help=(
+            "Path to a Python file containing data cleaning pipelines. "
+            "If omitted, uses ./pipeline.py or examples/pipeline.example.py when present."
+        ),
     )
 
 
-    # robots.txt
+    # robots.txt (default: bypass)
     p.add_argument(
         "--no-robots",
         action="store_true",
-        help="Ignore robots.txt entirely (use responsibly).",
+        default=True,
+        help="Ignore robots.txt entirely (default: on).",
+    )
+    p.add_argument(
+        "--respect-robots",
+        action="store_false",
+        dest="no_robots",
+        help="Obey robots.txt allow/deny and Crawl-delay.",
     )
     p.add_argument(
         "--ignore-crawl-delay",
         action="store_true",
-        help="Obey robots.txt allow/deny rules but ignore its Crawl-delay directive.",
+        help="When respecting robots.txt, ignore its Crawl-delay directive.",
     )
 
     # Output formats
@@ -361,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FMT[,FMT…]",
         help=(
             "Comma-separated output formats: json, csv, markdown, sqlite, html, all. "
-            "(default: json,csv,html)"
+            "(default: json,html)"
         ),
     )
 
@@ -423,28 +430,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Follow subdomains of the target during crawl.",
     )
 
-    # Origin bypass (manual IP)
-    p.add_argument(
-        "--origin-ip",
-        default=None,
-        metavar="IP",
-        help="Scrape via origin IP with Host header (bypass CDN edge).",
-    )
-    p.add_argument(
-        "--origin-title",
-        default=None,
-        metavar="TITLE",
-        help="Expected HTML title for origin validation.",
-    )
-    p.add_argument(
-        "--skip-origin-validate",
-        action="store_true",
-        help="Use manual origin IP without title validation (use responsibly).",
-    )
     p.add_argument(
         "--no-network-debug",
         action="store_true",
-        help="Disable per-page network listeners and failure dumps under _network_debug/.",
+        help="Disable per-page network listeners and failure dumps under each scan's network/ folder.",
     )
     p.add_argument(
         "--network-debug-always",
@@ -488,43 +477,6 @@ def _assign_slot_proxies(proxy_manager, concurrency: int, first_entry=None) -> l
         if nxt is not None and nxt not in assigned:
             assigned.append(nxt)
     return entries
-
-
-async def _resolve_origin_access(args, seed_url: str, proxy_url: str | None):
-    """Resolve OriginTarget from --origin-ip."""
-    hostname = urlparse(seed_url).netloc.split("@")[-1].split(":")[0].lower()
-    if not hostname:
-        print(f"{Fore.RED}[Origin] Invalid URL — no hostname{Style.RESET_ALL}")
-        return None
-
-    if not args.origin_ip:
-        return None
-
-    parsed = urlparse(seed_url)
-    scheme = parsed.scheme or "https"
-    port = parsed.port or (443 if scheme == "https" else 80)
-    origin = OriginTarget(
-        hostname=hostname,
-        origin_ip=args.origin_ip.strip(),
-        scheme=scheme,
-        port=port,
-        source="manual",
-    )
-    if args.skip_origin_validate:
-        origin.validated = True
-        print(f"{Fore.CYAN}[Origin] Using manual IP {origin.origin_ip} (validation skipped){Style.RESET_ALL}")
-        return origin
-
-    title = args.origin_title or await fetch_vanity_title(seed_url, proxy=proxy_url)
-    origin.expected_title = title or ""
-    if await validate_origin(
-        origin, seed_url, expected_title=title, proxy=proxy_url,
-    ):
-        origin.validated = True
-        print(f"{Fore.GREEN}[Origin] Validated manual IP {origin.origin_ip}{Style.RESET_ALL}")
-        return origin
-    print(f"{Fore.YELLOW}[Origin] Manual IP {origin.origin_ip} failed title validation{Style.RESET_ALL}")
-    return None
 
 
 async def _persist_run(
@@ -665,13 +617,14 @@ async def run(args):
     print(f"  URL         : {args.url}")
     print(f"  Mode        : {args.mode}")
     print(f"  Login       : {'yes' if args.login else 'no'}")
-    print(f"  Robots      : {'disabled (--no-robots)' if args.no_robots else 'enabled'}")
+    print(f"  Robots      : {'disabled (bypass)' if args.no_robots else 'enabled'}")
     proxy_label = (
         args.proxy_file or
         (f"{len(args.proxies.split(','))} inline" if args.proxies else "none")
     )
     print(f"  Proxies     : {proxy_label}")
     print(f"  Concurrency : {args.concurrency}")
+    print(f"  Wait        : {args.wait_until}")
     print(f"{'='*60}{Style.RESET_ALL}\n")
 
     screenshots_enabled = not getattr(args, "no_screenshots", False)
@@ -685,10 +638,28 @@ async def run(args):
     else:
         output_formats = [f for f in raw_fmt if f in _valid_formats]
         if not output_formats:
-            print(f"{Fore.YELLOW}[Warning] No valid --format values; defaulting to json,csv,html{Style.RESET_ALL}")
-            output_formats = ["json", "csv", "html"]
+            print(f"{Fore.YELLOW}[Warning] No valid --format values; defaulting to json,html{Style.RESET_ALL}")
+            output_formats = ["json", "html"]
     print(f"  Formats     : {', '.join(output_formats)}")
     print(f"{'='*60}{Style.RESET_ALL}\n")
+
+    # Default proxy pool: proxies.txt in cwd when no explicit proxy source
+    if not args.proxy_file and not args.proxies:
+        default_proxy = os.path.join(os.getcwd(), "proxies.txt")
+        if os.path.isfile(default_proxy):
+            args.proxy_file = default_proxy
+            print(f"{Fore.CYAN}[Proxy] Using default pool: {default_proxy}{Style.RESET_ALL}")
+
+    # Default data pipeline when present
+    if not args.pipeline_file:
+        for candidate in (
+            os.path.join(os.getcwd(), "pipeline.py"),
+            os.path.join(os.getcwd(), "examples", "pipeline.example.py"),
+        ):
+            if os.path.isfile(candidate):
+                args.pipeline_file = candidate
+                print(f"{Fore.CYAN}[Pipeline] Using {candidate}{Style.RESET_ALL}")
+                break
 
     # Login requires a real browser engine (not lightweight HTTP).
     if args.login:
@@ -780,32 +751,17 @@ async def run(args):
         initial_proxy_dict  = initial_proxy_entry.to_patchright() if initial_proxy_entry else None
 
 
-    # ── Origin resolution (before browser — uses aiohttp) ───────
-    proxy_url = initial_proxy_entry.server if initial_proxy_entry else None
-    origin_target = None
-    if args.origin_ip:
-        try:
-            origin_target = await _resolve_origin_access(args, args.url, proxy_url)
-        except Exception as exc:
-            print(f"{Fore.RED}[Origin] Setup failed: {exc}{Style.RESET_ALL}")
-            return
-        if not origin_target:
-            print(f"{Fore.RED}[Origin] No validated origin — aborting.{Style.RESET_ALL}")
-            return
-        print(
-            f"{Fore.CYAN}[Origin] Scraping {origin_target.hostname} via "
-            f"{origin_target.origin_ip} ({origin_target.source}){Style.RESET_ALL}"
-        )
-
     # ── Browser ───────────────────────────────────────────────────────────────
     browser = BrowserManager(
         headless=not args.no_headless,
+        locale=DEFAULT_CONFIG.get("locale"),
+        timezone_id=DEFAULT_CONFIG.get("timezone_id"),
+        accept_language=DEFAULT_CONFIG.get("accept_language"),
         rotate_user_agent=DEFAULT_CONFIG["rotate_user_agent"],
         rotate_geolocation=rotate_geolocation if proxy_manager else DEFAULT_CONFIG["rotate_geolocation"],
         rotate_viewport=DEFAULT_CONFIG["rotate_viewport"],
         humanize=not bool(getattr(args, "no_humanize", False)),
     )
-    resolver = origin_target.host_resolver_rule() if origin_target else None
     slot_entries = _assign_slot_proxies(
         proxy_manager, args.concurrency, initial_proxy_entry,
     )
@@ -814,7 +770,6 @@ async def run(args):
         for e in slot_entries
     ]
     await browser.start(
-        host_resolver_rules=resolver,
         pool_size=args.concurrency,
         slot_identities=slot_identities,
     )
@@ -907,9 +862,6 @@ async def run(args):
         session_config = _apply_vapt_config(session_config, args, args.url)
         session_config["max_depth"] = args.depth
         session_config["max_pages"] = args.max_pages
-        session_config["skip_origin_validate"] = bool(getattr(args, "skip_origin_validate", False))
-        if args.origin_title:
-            session_config["origin_title"] = args.origin_title
         session_config["network_debug"] = not bool(getattr(args, "no_network_debug", False))
         session_config["network_debug_always"] = bool(getattr(args, "network_debug_always", False))
         session_config["consent_dismiss"] = not bool(getattr(args, "no_consent_dismiss", False))
@@ -936,9 +888,10 @@ async def run(args):
             session_config["captcha_solver"] = "capsolver"
             session_config["captcha_api_key"] = _cap.api_key
             session_config["captcha_solver_enabled"] = True
+            mode = "headed" if getattr(args, "no_headless", False) else "headless"
             print(
-                f"{Fore.CYAN}[Captcha] Auto-solver=capsolver "
-                f"(key …{_cap.api_key[-4:]}){Style.RESET_ALL}"
+                f"{Fore.CYAN}[Captcha] CapSolver enabled "
+                f"(browser={mode}, key …{_cap.api_key[-4:]}){Style.RESET_ALL}"
             )
         elif getattr(args, "captcha_solver", None) == "capsolver" and not _cap.api_key:
             print(
@@ -957,8 +910,6 @@ async def run(args):
             session_config["_proxy_url"] = initial_proxy_entry.server
         if args.allow_subdomains:
             session_config["allow_subdomains"] = True
-        if origin_target:
-            session_config["origin_access"] = origin_target.to_dict()
 
         # Auth crawl policies — only when login actually succeeded
         pin_proxy = bool(authenticated)
