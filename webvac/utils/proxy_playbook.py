@@ -73,16 +73,3 @@ def apply_proxy_playbook(
     if "pin_proxy_geo" in preset:
         out["pin_proxy_geo"] = bool(preset["pin_proxy_geo"])
     return out
-
-
-def playbook_help_text() -> str:
-    lines = [
-        "Proxy playbook presets:",
-        "  residential — sticky=25, latency pick, long cooldown, UA+geo+tz pinned per IP",
-        "  datacenter  — sticky=5, round-robin, short cooldown",
-        "  none        — no playbook overrides (default)",
-        "",
-        "Residential tip: use provider sticky-session credentials in the username",
-        "(e.g. user-session-abc123) so the ISP IP stays stable for the sticky window.",
-    ]
-    return "\n".join(lines)

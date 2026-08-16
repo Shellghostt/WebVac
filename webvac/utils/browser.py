@@ -16,6 +16,7 @@ Anti-detection hardening (all free, no proxy required):
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import re
 from typing import Optional
@@ -483,20 +484,6 @@ class BrowserManager:
         label = proxy["server"] if proxy else "direct (no proxy)"
         print(f"[Browser] Slot {slot} rotated → {label}  geo={loc[0]}")
 
-    async def reconfigure_host_resolver(
-        self,
-        rule: Optional[str],
-        slot_identities: Optional[list[SlotIdentity]] = None,
-    ) -> None:
-        """Restart browser with new host-resolver rules (origin bypass)."""
-        self._host_resolver_rules = rule
-        if slot_identities is not None:
-            self._slot_proxy_configs = slot_identities
-        engine = getattr(self, "engine", "patchright")
-        await self._shutdown_current()
-        await self._launch(engine)
-        await self.broadcast_auth_session()
-
     async def new_page(self, slot: int = 0):
         """Open a new tab in an isolated pool slot."""
         slot_idx = slot % max(1, self._pool_size)
@@ -903,6 +890,10 @@ class BrowserManager:
             # Strip Chromium's enable-automation switch when present
             "ignore_default_args": ["--enable-automation"],
         }
+        # Prefer full Chromium over chrome-headless-shell so CAPTCHA iframes /
+        # CapSolver inject paths behave the same in headless as in headed.
+        if self.headless:
+            os.environ.setdefault("PLAYWRIGHT_CHROMIUM_USE_HEADLESS_SHELL", "0")
         try:
             self._browser = await self._playwright_handle.chromium.launch(**launch_kwargs)
         except TypeError:

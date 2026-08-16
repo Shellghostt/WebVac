@@ -285,43 +285,6 @@ async def scroll_page(
     await scroll_by(page, delta, cfg=cfg)
 
 
-async def type_text(
-    page,
-    selector: str,
-    text: str,
-    *,
-    cfg: Optional[HumanizeConfig] = None,
-    clear: bool = True,
-) -> None:
-    """Click into a field and type with variable delays (rare typos)."""
-    cfg = cfg or HumanizeConfig()
-    await click(page, selector=selector, cfg=cfg)
-    await asyncio.sleep(random.uniform(0.08, 0.25))
-    if clear:
-        try:
-            await page.locator(selector).first.fill("")
-        except Exception:
-            pass
-
-    if not cfg.enabled:
-        await page.locator(selector).first.type(text, delay=80)
-        return
-
-    for ch in text:
-        if cfg.typo_chance > 0 and random.random() < cfg.typo_chance and ch.isalnum():
-            wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
-            await page.keyboard.type(wrong, delay=random.randint(cfg.type_delay_min_ms, cfg.type_delay_max_ms))
-            await asyncio.sleep(random.uniform(0.05, 0.15))
-            await page.keyboard.press("Backspace")
-            await asyncio.sleep(random.uniform(0.04, 0.12))
-        await page.keyboard.type(
-            ch,
-            delay=random.randint(cfg.type_delay_min_ms, cfg.type_delay_max_ms),
-        )
-        if ch in " .,!?":
-            await asyncio.sleep(random.uniform(0.04, 0.14))
-
-
 async def settle(page, *, cfg: Optional[HumanizeConfig] = None) -> None:
     """
     Post-navigation micro-behaviour: small moves, short idle, light scroll nudge.

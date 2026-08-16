@@ -7,18 +7,17 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Dynamic scraping with a real browser engine (Patchright)
 - Single-page and recursive crawl modes
 - Concurrency support with isolated browser slot identities
-- Proxy pools with latency-based selection, round-robin, or random strategy
-- robots.txt support with optional crawl-delay override
-- Manual origin IP bypass (CDN edge → origin via Host header)
-- Automatic screenshots for blocked/CAPTCHA pages
-- Structured output in JSON, CSV, HTML, Markdown, SQLite, or all formats
-- Historical scan sessions and diff generation between runs
+- Proxy pools with latency-based selection, round-robin, or random strategy (auto-uses `proxies.txt`)
+- robots.txt bypassed by default (`--respect-robots` to obey)
+- Automatic screenshots for blocked/CAPTCHA pages (per-scan `assets/screenshots/`)
+- Structured output (default: JSON + HTML report)
+- Historical scan sessions under `scraped_data/<target>/scans/…`
 - PDF and sourcemap asset download support
-- Unified auth: Patchright login, session restore, MFA/TOTP, OAuth bootstrap
+- Unified auth: Patchright login, session restore, MFA/TOTP
 - Auth walls (`/login`, `/ap/signin`, …) skipped separately from bot/WAF blocks
 - Human-like mouse/scroll/warmup on Patchright Chromium (`--no-humanize` to disable)
-- Network debug dumps on scrape failures (`scraped_data/_network_debug/`)
-- Optional CapSolver auto-CAPTCHA (reCAPTCHA / hCaptcha / Turnstile) with manual fallback
+- Network debug dumps on scrape failures (per-scan `network/` folder)
+- Optional CapSolver auto-CAPTCHA (reCAPTCHA / hCaptcha / Turnstile)
 - Logout URL deny and sticky proxy when authenticated
 - Optional VAPT/recon via `--vapt` / `--profile` (collectors → analyzers → findings; default off)
 
@@ -145,7 +144,6 @@ python -m webvac --url https://example.com --mode crawl --depth 3 --max-pages 50
 - `--auth-check-url URL`: Protected URL used to verify session after login/restore
 - `--on-auth-wall abort|skip|relogin`: Mid-crawl login-wall policy (default: `skip`)
 - `--session-ttl SECONDS`: Expire saved sessions (0 = never)
-- `--auth-bootstrap`: Open a visible browser for manual OAuth/SSO, then export `--session-file`
 - `--otp-prompt`: Prompt for OTP/MFA when an OTP field appears
 - `--no-auth-proxy-rotate`: Pin proxy while authenticated (also default when `--login`)
 - `--dismiss-selector CSS`: Extra Accept-button selector (repeatable; login + every scrape)
@@ -208,17 +206,9 @@ python -m webvac --url https://example.com --mode crawl --profile standard
 
 Recon JSON/HTML lands under the scan directory alongside scrape output. See [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md).
 
-### Origin bypass (manual IP)
-
-When you already know the origin server IP (authorized use only):
-
-- `--origin-ip IP`: Scrape via origin IP with Host header (CDN edge bypass)
-- `--origin-title TITLE`: Expected HTML title for origin validation
-- `--skip-origin-validate`: Use manual IP without title validation
-
 ### Network diagnosis (default on)
 
-Listeners attach on every dynamic page load (document, script, xhr/fetch/websocket + failed resources). On scrape failure, dumps go to `{output}/_network_debug/*.json` with status histogram and root-cause hints.
+Listeners attach on every dynamic page load (document, script, xhr/fetch/websocket + failed resources). On scrape failure, dumps go to `{scan_session}/network/*.json` with status histogram and root-cause hints.
 
 - `--no-network-debug`: Disable listeners and dumps
 - `--network-debug-always`: Also dump on successful pages
@@ -280,6 +270,8 @@ scraped_data/
           data.json
           data.csv
           report.html
+        network/
+          <host>_<timestamp>.json
         assets/
           pdfs/
           sourcemaps/
@@ -287,8 +279,6 @@ scraped_data/
         meta/
           meta.json
           session.json
-    diffs/
-      ...
 ```
 
 ## Architecture Docs
@@ -346,7 +336,7 @@ python -m unittest discover -s tests -p "test_*.py"
 - Increase delays between requests.
 - Keep humanize enabled (default); try `--no-headless` for hard challenges.
 - Use origin mode only when authorized.
-- Inspect `{output}/_network_debug/*.json` for challenge/CAPTCHA URL hints.
+- Inspect `{scan_session}/network/*.json` for challenge/CAPTCHA URL hints.
 
 ### Empty or partial data
 
