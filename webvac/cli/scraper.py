@@ -30,6 +30,7 @@ Usage examples:
 import asyncio
 import argparse
 import os
+import shutil
 import sys
 
 from colorama import init, Fore, Style
@@ -46,6 +47,10 @@ from webvac.core.pipeline import PipelineManager
 from webvac.store.scan_session import ScanSession
 from webvac.utils.asset_downloader import AssetDownloader, collect_pdf_urls
 from webvac.utils.browser_pool import SlotIdentity
+from webvac.vapt.decaffeinator import (
+    resolve_decaffeinator_root,
+    run_decaffeinator_task,
+)
 from urllib.parse import urlparse
 
 init(autoreset=True)  # colorama
@@ -69,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--doctor",
         action="store_true",
         help="Run environment and config checks, then exit without scraping.",
+    )
+    p.add_argument(
+        "--task",
+        choices=["scrape", "vapt"],
+        default="scrape",
+        help="Run the normal scraper or the opt-in De-Caffeinator VAPT task.",
     )
 
     # Mode
@@ -183,6 +194,39 @@ def build_parser() -> argparse.ArgumentParser:
     # Output
     p.add_argument("--output", default=DEFAULT_CONFIG["output_dir"], help="Output directory for JSON/CSV files.")
     p.add_argument("--label",  default=None, help="Custom label for output file names.")
+    p.add_argument(
+        "--decaffeinator-root",
+        default=None,
+        metavar="DIR",
+        help="Path to the De-Caffeinator root directory (defaults to ./trial4/blob-unpacker).",
+    )
+    p.add_argument(
+        "--vapt-profile",
+        choices=["standard", "quick", "stealth", "deep"],
+        default="standard",
+        help="Preset profile for the De-Caffeinator VAPT task.",
+    )
+    p.add_argument(
+        "--vapt-format",
+        choices=["json", "jsonl"],
+        default="json",
+        help="Output format for De-Caffeinator artifacts.",
+    )
+    p.add_argument(
+        "--vapt-playwright",
+        action="store_true",
+        help="Enable De-Caffeinator's Playwright-based SPA asset discovery.",
+    )
+    p.add_argument(
+        "--vapt-wayback",
+        action="store_true",
+        help="Enable De-Caffeinator's Wayback-based historical asset discovery.",
+    )
+    p.add_argument(
+        "--vapt-no-files",
+        action="store_true",
+        help="Do not write De-Caffeinator source/deobfuscated files to disk.",
+    )
 
     # Politeness
     p.add_argument("--delay-min", type=float, default=DEFAULT_CONFIG["delay_min"], help="Min delay between requests (seconds).")
@@ -489,20 +533,26 @@ async def _run_doctor(args) -> int:
     warn = 0
     fail = 0
 
+    def _emit(text: str) -> None:
+        try:
+            print(text)
+        except UnicodeEncodeError:
+            print(text.encode("ascii", "replace").decode("ascii"))
+
     def _pass(msg: str) -> None:
         nonlocal ok
         ok += 1
-        print(f"{Fore.GREEN}[OK] {msg}{Style.RESET_ALL}")
+        _emit(f"{Fore.GREEN}[OK] {msg}{Style.RESET_ALL}")
 
     def _warn(msg: str) -> None:
         nonlocal warn
         warn += 1
-        print(f"{Fore.YELLOW}[WARN] {msg}{Style.RESET_ALL}")
+        _emit(f"{Fore.YELLOW}[WARN] {msg}{Style.RESET_ALL}")
 
     def _fail(msg: str) -> None:
         nonlocal fail
         fail += 1
-        print(f"{Fore.RED}[FAIL] {msg}{Style.RESET_ALL}")
+        _emit(f"{Fore.RED}[FAIL] {msg}{Style.RESET_ALL}")
 
     _pass(f"Python {sys.version.split()[0]}")
 
@@ -527,6 +577,17 @@ async def _run_doctor(args) -> int:
             _fail(f"Target URL is invalid: {args.url}")
     else:
         _warn("No --url provided; skipping target-specific checks.")
+
+    if getattr(args, "task", "scrape") == "vapt":
+        try:
+            root = resolve_decaffeinator_root(getattr(args, "decaffeinator_root", None))
+            _pass(f"De-Caffeinator root found: {root}")
+        except Exception as exc:
+            _fail(str(exc))
+        if shutil.which("npx") or shutil.which("npx.cmd"):
+            _pass("Node/npx detected for De-Caffeinator.")
+        else:
+            _fail("Node/npx not found in PATH; De-Caffeinator cannot run.")
 
     if args.pipeline_file:
         if os.path.isfile(args.pipeline_file):
@@ -607,28 +668,35 @@ async def _run_doctor(args) -> int:
             except Exception as exc:
                 _warn(f"Proxy health-check failed: {exc}")
 
-    browser = BrowserManager(
-        headless=True,
-        locale=DEFAULT_CONFIG.get("locale"),
-        timezone_id=DEFAULT_CONFIG.get("timezone_id"),
-        accept_language=DEFAULT_CONFIG.get("accept_language"),
-        rotate_user_agent=DEFAULT_CONFIG["rotate_user_agent"],
-        rotate_geolocation=DEFAULT_CONFIG["rotate_geolocation"],
-        rotate_viewport=DEFAULT_CONFIG["rotate_viewport"],
-        humanize=False,
+    needs_patchright = (
+        getattr(args, "task", "scrape") == "scrape"
+        or getattr(args, "vapt_playwright", False)
     )
-    try:
-        await browser.start(pool_size=1, slot_identities=[SlotIdentity()])
-        _pass("Patchright browser launched successfully.")
-    except Exception as exc:
-        _fail(f"Patchright browser launch failed: {exc}")
-    finally:
+    if needs_patchright:
+        browser = BrowserManager(
+            headless=True,
+            locale=DEFAULT_CONFIG.get("locale"),
+            timezone_id=DEFAULT_CONFIG.get("timezone_id"),
+            accept_language=DEFAULT_CONFIG.get("accept_language"),
+            rotate_user_agent=DEFAULT_CONFIG["rotate_user_agent"],
+            rotate_geolocation=DEFAULT_CONFIG["rotate_geolocation"],
+            rotate_viewport=DEFAULT_CONFIG["rotate_viewport"],
+            humanize=False,
+        )
         try:
-            await browser.stop()
-        except Exception:
-            pass
+            await browser.start(pool_size=1, slot_identities=[SlotIdentity()])
+            _pass("Patchright browser launched successfully.")
+        except Exception as exc:
+            _fail(f"Patchright browser launch failed: {exc}")
+        finally:
+            try:
+                await browser.stop()
+            except Exception:
+                pass
+    else:
+        _warn("Skipping Patchright browser launch check for non-browser VAPT task.")
 
-    print(f"\n{Fore.CYAN}Doctor summary: {ok} ok, {warn} warnings, {fail} failures{Style.RESET_ALL}")
+    _emit(f"\n{Fore.CYAN}Doctor summary: {ok} ok, {warn} warnings, {fail} failures{Style.RESET_ALL}")
     return 1 if fail else 0
 
 
@@ -695,6 +763,20 @@ async def _persist_run(
 
 
 async def run(args):
+    if getattr(args, "task", "scrape") == "vapt":
+        result = run_decaffeinator_task(args)
+        if result.return_code != 0:
+            raise SystemExit(result.return_code)
+        print(f"\n{Fore.GREEN}VAPT task complete.{Style.RESET_ALL}")
+        print(f"  Session    -> {result.session_dir}")
+        print(f"  Artifacts  -> {result.output_dir}")
+        print(f"  Meta       -> {result.meta_path}")
+        if result.run_report_path:
+            print(f"  Report     -> {result.run_report_path}")
+        if result.summary_path:
+            print(f"  Summary    -> {result.summary_path}")
+        return
+
     # ── Banner ───────────────────────────────────────────────────────────────
     print(f"\n{Fore.CYAN}{'='*60}")
     print(f"  Dynamic Web Scraper")

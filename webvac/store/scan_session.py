@@ -8,6 +8,7 @@ Layout:
                 <YYYYMMDD_HHMMSS>_<scan_id>/
                     scrape/     report.html, data.json, ...
                     network/    per-page network debug dumps
+                    analysis/   optional external analysis outputs
                     assets/
                         pdfs/
                         sourcemaps/
@@ -58,6 +59,7 @@ class ScanSession:
             "root": base,
             "scrape": os.path.join(base, "scrape"),
             "network": os.path.join(base, "network"),
+            "analysis": os.path.join(base, "analysis"),
             "assets_pdfs": os.path.join(base, "assets", "pdfs"),
             "assets_sourcemaps": os.path.join(base, "assets", "sourcemaps"),
             "assets_screenshots": os.path.join(base, "assets", "screenshots"),
@@ -112,6 +114,7 @@ class ScanSession:
             "layout": {
                 "scrape": "scrape/",
                 "network": "network/",
+                "analysis": "analysis/",
                 "assets": "assets/",
                 "meta": "meta/",
             },
