@@ -32,14 +32,8 @@ from webvac.utils.detection import wait_for_challenge_resolution
 from webvac.utils.browser_pool import SlotIdentity
 from webvac.core.pipeline import PipelineManager
 from webvac.core.page_scrape_flow import run_page_scrape
-from webvac.collectors.engine import CollectorEngine
-from webvac.collectors.network.collector import NetworkCollector
-from webvac.collectors.base import CollectorContext
-from webvac.store.artifact_store import ArtifactStore
-from webvac.scope.scope_manager import CrawlScope, ScopeManager
 from webvac.models.scan import ScanMetadata, TargetMetadata
 from webvac.models.origin import OriginTarget
-from webvac.graph.endpoint_graph import EndpointGraph
 
 
 def _aiohttp_proxy_args(proxy_entry) -> tuple[Optional[str], Optional[aiohttp.BasicAuth]]:
@@ -82,7 +76,6 @@ class Crawler:
         engine: str = "dynamic",
         captcha_prompt_enabled: bool = True,
         sticky_requests: int = DEFAULT_CONFIG["sticky_requests"],
-        recon_config: Optional[dict[str, Any]] = None,
         auth_manager=None,
     ):
         self.browser = browser
@@ -117,13 +110,7 @@ class Crawler:
         # Tracks slot-0 proxy (backward compat); use _proxy_for_slot() per worker.
         self._slot_proxies: list[Optional[ProxyEntry]] = [None] * self.concurrency
 
-        # VAPT pipeline — optional; disabled in scraper until re-enabled
-        self.session_config = recon_config or dict(DEFAULT_CONFIG)
-        self._vapt = bool(self.session_config.get("vapt_enabled"))
-        self.artifact_store: Optional[ArtifactStore] = None
-        self.scope_manager: Optional[ScopeManager] = None
-        self.collector_engine = CollectorEngine() if self._vapt else None
-        self.endpoint_graph: Optional[EndpointGraph] = None
+        self.session_config = dict(DEFAULT_CONFIG)
         self._scan: Optional[ScanMetadata] = None
         self.network_debug_dir: Optional[str] = None
         self._seed_url: Optional[str] = None
@@ -439,10 +426,6 @@ class Crawler:
                             queued.add(href)
                             queue.append((href, depth + 1))
                             added += 1
-                            if self.endpoint_graph:
-                                self.endpoint_graph.add_edge(
-                                    url, href, source="link", child_depth=depth + 1
-                                )
                             await self._prefetch_robots(href)
                         postfix = _fmt_eta(len(queue))
                         if added:
@@ -471,7 +454,7 @@ class Crawler:
         await self.finalize_session()
         return results
 
-    # ── Collectors / artifact store ───────────────────────────────────────────
+    # ── Session setup ────────────────────────────────────────────────────────
 
     async def _init_session(self, seed_url: str) -> None:
         self._seed_url = seed_url
@@ -483,10 +466,9 @@ class Crawler:
             target.allowed_domains = [target.domain]
         self._scan = ScanMetadata(
             target=target,
-            profile=self.session_config.get("profile", "scrape"),
-            mode="active" if self.session_config.get("active_recon") else "scrape",
+            profile="scrape",
+            mode="scrape",
         )
-        # Bind screenshots + network dumps into this scan's folder immediately
         try:
             from webvac.store.scan_session import ScanSession
 
@@ -500,24 +482,6 @@ class Crawler:
         except Exception as exc:
             self.network_debug_dir = None
             tqdm.write(f"[Crawler] Session folder setup failed: {exc}")
-        scope = CrawlScope(
-            seed_url=seed_url,
-            allowed_domains=target.allowed_domains,
-            allow_subdomains=self.session_config.get("allow_subdomains", False),
-            max_depth=self.max_depth,
-            max_pages=self.max_pages,
-            max_requests=self.session_config.get("max_requests"),
-            exclude_patterns=self.session_config.get("exclude_patterns", []),
-            include_patterns=self.session_config.get("include_patterns", []),
-            origin_access=self._origin,
-        )
-        self.scope_manager = ScopeManager(scope)
-        if self._vapt:
-            self.artifact_store = ArtifactStore(self._scan)
-            self.endpoint_graph = EndpointGraph(seed_url)
-        else:
-            self.artifact_store = None
-            self.endpoint_graph = None
 
     def _url_ok_for_crawl(self, url: str, origin: str) -> bool:
         from webvac.auth.wall import is_auth_wall, is_logout_url
@@ -531,8 +495,6 @@ class Crawler:
         ):
             if is_logout_url(url):
                 return False
-        if self.scope_manager and not self.scope_manager.scope.is_url_in_scope(url):
-            return False
         if self._origin:
             parsed_host = urlparse(url).netloc.lower().split(":")[0]
             vanity = self._origin.hostname.lower()
@@ -545,11 +507,7 @@ class Crawler:
         if self.same_domain_only:
             host = urlparse(url).netloc
             if host != origin:
-                if not (
-                    self.session_config.get("allow_subdomains")
-                    and self.scope_manager
-                    and self.scope_manager.scope.is_domain_allowed(url)
-                ):
+                if not self.session_config.get("allow_subdomains"):
                     return False
         if self.allow_regex and not self.allow_regex.search(url):
             return False
@@ -557,53 +515,12 @@ class Crawler:
             return False
         return True
 
-    async def _build_collector_ctx(self, url: str, depth: int = 0) -> CollectorContext:
-        cookies: list[dict] = []
-        try:
-            cookies = await self.browser.get_cookies()
-        except Exception:
-            pass
-        cfg = dict(self.session_config)
-        if self._proxy_for_slot(0):
-            cfg["_proxy_url"] = self._proxy_for_slot(0).server
-        return CollectorContext(
-            artifact_store=self.artifact_store,
-            config=cfg,
-            scan=self._scan,
-            scope_manager=self.scope_manager,
-            base_url=url,
-            depth=depth,
-            cookies=cookies,
-        )
-
-    async def _run_page_collectors(
-        self,
-        page: Page,
-        response,
-        url: str,
-        depth: int,
-        network_collector: Optional[NetworkCollector],
-    ) -> None:
-        if not self._vapt or not self.artifact_store or not self.collector_engine:
-            return
-        ctx = await self._build_collector_ctx(url, depth)
-        if self.scope_manager:
-            self.scope_manager.record_page_visit(url)
-        await self.collector_engine.collect_page(
-            ctx,
-            page=page,
-            response=response,
-            network_collector=network_collector,
-            endpoint_graph=self.endpoint_graph,
-        )
-
     async def _collect_page(
         self,
         page: Page,
         url: str,
         response,
         depth: int,
-        network_collector: Optional[NetworkCollector],
         screenshot_path: Optional[str] = None,
     ) -> dict:
         page_url = getattr(page, "url", None) or url
@@ -616,16 +533,6 @@ class Crawler:
         if response:
             server_hdr = (response.headers or {}).get("server", "")
 
-        if self._vapt and self.artifact_store:
-            await self._run_page_collectors(page, response, url, depth, network_collector)
-            return self.page_builder.from_artifacts(
-                self.artifact_store,
-                page_url,
-                screenshot=screenshot_path,
-                fallback_html=fallback_html,
-                fallback_url=page_url,
-            )
-
         return self.page_builder.from_html(
             fallback_html,
             page_url=page_url,
@@ -635,12 +542,7 @@ class Crawler:
         )
 
     async def finalize_session(self) -> None:
-        if not self._vapt or not self.artifact_store or not self._seed_url:
-            return
-        ctx = await self._build_collector_ctx(self._seed_url, 0)
-        await self.collector_engine.collect_session(ctx)
-        if self._scan:
-            self._scan.pages_visited = len(self.artifact_store.page_urls())
+        pass
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -703,26 +605,6 @@ class Crawler:
                     return None
 
                 html = await response.text()
-
-                class MockPage:
-                    def __init__(self, url, html):
-                        self.url = url
-                        self._html = html
-
-                    async def content(self):
-                        return self._html
-
-                mock_page = MockPage(url, html)
-                if self._vapt and self.artifact_store:
-                    await self._run_page_collectors(
-                        mock_page, response, url, depth, None,
-                    )
-                    return self.page_builder.from_artifacts(
-                        self.artifact_store,
-                        url,
-                        fallback_html=html,
-                        fallback_url=url,
-                    )
                 return self.page_builder.from_html(
                     html, page_url=url, base_url=url,
                 )

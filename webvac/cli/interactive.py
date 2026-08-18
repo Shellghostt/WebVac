@@ -112,7 +112,7 @@ def print_banner():
             + _B + b["v"] + _RST
         )
 
-    tag = "asyncio scraper  ·  crawl  ·  recon" if _unicode_ok() else "asyncio scraper | crawl | recon"
+    tag = "asyncio scraper  ·  crawl" if _unicode_ok() else "asyncio scraper | crawl"
     pad = max(0, (w - 2 - len(tag)) // 2)
     print(
         _B + b["v"] + _RST
@@ -703,26 +703,6 @@ def main():
             ui_warn("No proxies.txt found — using direct connection.")
 
         section("Browser")
-        vapt_choice = prompt_choice(
-            "Enable VAPT / recon pipeline?",
-            [
-                "No (scrape only)",
-                "Yes — standard profile (--vapt)",
-                "Yes — deep + active recon (--profile deep)",
-                "Yes — bugbounty passive (--profile bugbounty)",
-                "Yes — quick snapshot (--profile quick)",
-            ],
-            0,
-        )
-        if "standard" in vapt_choice:
-            cmd_args.append("--vapt")
-        elif "deep" in vapt_choice:
-            cmd_args += ["--profile", "deep"]
-        elif "bugbounty" in vapt_choice:
-            cmd_args += ["--profile", "bugbounty"]
-        elif "quick" in vapt_choice:
-            cmd_args += ["--profile", "quick"]
-
         headless_choice = prompt_choice(
             "Run browser in headless mode?",
             [

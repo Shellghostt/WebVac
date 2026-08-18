@@ -105,53 +105,10 @@ DEFAULT_CONFIG = {
     # Screenshot settings (CAPTCHA / bot-block pages only; CLI --no-screenshots to disable)
     "screenshots_subdir": "screenshots",
 
-    # VAPT pipeline — disabled until re-enabled from scraper
-    "vapt_enabled": False,
-
-    "profile": "scrape",
     "allowed_domains": [],
     "allow_subdomains": False,
-    "max_requests": None,
     "exclude_patterns": [],
     "include_patterns": [],
-
-    "collectors": {
-        "http": False,
-        "html": False,
-        "storage": False,
-        "network": False,
-        "javascript": False,
-    },
-    "analyzers": {
-        "headers": False,
-        "cookies": False,
-        "auth": False,
-        "storage": False,
-        "js": False,
-        "sourcemap": False,
-        "network": False,
-        "tech": False,
-        "graphql": False,
-        "oauth": False,
-        "cloud": False,
-        "html": False,
-    },
-    "active_recon": False,
-    "active_probes": {
-        "files": False,
-        "graphql": False,
-        "swagger": False,
-        "git": False,
-        "env": False,
-        "http_methods": False,
-    },
-    "active_probe_concurrency": 5,
-    "active_probe_delay": 0.3,
-    "javascript": {
-        "download_external": False,
-        "fetch_source_maps": False,
-        "concurrency": 5,
-    },
 
     # Origin bypass (optional OriginTarget dict via session_config — no CLI flag)
     "origin_access": None,

@@ -1,5 +1,5 @@
 """
-cookie_audit.py — Lightweight auth cookie flag checks (scrape-safe warnings + VAPT intel).
+cookie_audit.py — Lightweight auth cookie flag checks.
 """
 
 from __future__ import annotations

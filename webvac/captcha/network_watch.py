@@ -2,7 +2,7 @@
 
 Attaches page request/response listeners and records which captcha provider
 scripts/iframes loaded (and any sitekeys in query strings). Independent of
-the heavier VAPT NetworkCollector.
+the scrape network debug listener.
 """
 
 from __future__ import annotations

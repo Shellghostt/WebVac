@@ -15,7 +15,7 @@ from urllib.parse import quote, urlparse
 
 from tqdm import tqdm
 
-from webvac.collectors.network.collector import NetworkCollector
+from webvac.utils.network_listener import NetworkListener
 
 if TYPE_CHECKING:
     from webvac.core.crawler import Crawler
@@ -25,20 +25,11 @@ def _network_debug_enabled(crawler: "Crawler") -> bool:
     return bool(crawler.session_config.get("network_debug", True))
 
 
-def _vapt_network_enabled(crawler: "Crawler") -> bool:
-    return bool(
-        crawler._vapt
-        and crawler.session_config.get("collectors", {}).get("network")
-    )
-
-
-def _attach_network(crawler: "Crawler", page, url: str) -> Optional[NetworkCollector]:
-    """Attach listeners for scrape diagnosis and/or VAPT recon."""
-    scrape = _network_debug_enabled(crawler)
-    vapt = _vapt_network_enabled(crawler)
-    if not scrape and not vapt:
+def _attach_network(crawler: "Crawler", page, url: str) -> Optional[NetworkListener]:
+    """Attach network listener for scrape diagnosis."""
+    if not _network_debug_enabled(crawler):
         return None
-    nc = NetworkCollector(scrape_debug=bool(scrape))
+    nc = NetworkListener()
     nc.attach(page, page_url=url)
     return nc
 
@@ -57,7 +48,7 @@ async def _handle_auth_wall(
     page,
     url: str,
     *,
-    network_collector: Optional[NetworkCollector],
+    network_collector: Optional[NetworkListener],
     response=None,
 ) -> tuple[str, dict]:
     """
@@ -92,7 +83,7 @@ async def _handle_auth_wall(
 
 async def _flush_network(
     crawler: "Crawler",
-    nc: Optional[NetworkCollector],
+    nc: Optional[NetworkListener],
     url: str,
     *,
     reason: str,
@@ -262,7 +253,7 @@ async def run_page_scrape(
 
     for attempt in range(crawler.max_retries + 1):
         page = None
-        network_collector: Optional[NetworkCollector] = None
+        network_collector: Optional[NetworkListener] = None
         try:
             page = await crawler.browser.new_page(slot=slot)
             network_collector = _attach_network(crawler, page, url)

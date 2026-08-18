@@ -8,8 +8,6 @@ Folder structure:
             scans/
                 <YYYYMMDD_HHMMSS>_<scan_id>/
                     scrape/     report.html, data.json, ...
-                    recon/      findings, intelligence, recon reports
-                    artifacts/  artifacts.json
                     network/    network debug dumps
                     assets/     pdfs/, sourcemaps/, screenshots/
                     meta/       session.json, meta.json
@@ -25,7 +23,6 @@ from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from webvac.data.recon_report import ReconReportWriter
 from webvac.models.scan import ScanMetadata
 from webvac.store.scan_session import ScanSession
 
@@ -51,8 +48,6 @@ class Storage:
         data: list[dict],
         label: str = None,
         formats: list[str] = None,
-        recon: Optional[dict[str, Any]] = None,
-        artifact_store=None,
         scan: Optional[ScanMetadata] = None,
         *,
         interrupted: bool = False,
@@ -62,7 +57,7 @@ class Storage:
         Save a list of page dicts in the requested formats.
         Returns a dict mapping format name → saved file path.
         """
-        if not data and recon is None and artifact_store is None:
+        if not data:
             print("[Storage] No data to save.")
             return {}
 
@@ -76,9 +71,7 @@ class Storage:
             layout = session.layout_paths()
             session_dir = session.session_dir
             scrape_dir = layout["scrape"]
-            recon_dir = layout["recon"]
             meta_dir = layout["meta"]
-            artifacts_dir = layout["artifacts"]
             session_key = session.session_name
             paths: dict[str, str] = {
                 "meta": session.write_meta(
@@ -91,9 +84,7 @@ class Storage:
             session_key = datetime.now().strftime("%Y%m%d_%H%M%S")
             session_dir = os.path.join(self.output_dir, slug, session_key)
             scrape_dir = session_dir
-            recon_dir = session_dir
             meta_dir = session_dir
-            artifacts_dir = session_dir
             os.makedirs(session_dir, exist_ok=True)
             paths = {}
 
@@ -104,7 +95,7 @@ class Storage:
             "sqlite":   lambda d, _: self._save_sqlite(d, scrape_dir, slug),
             "html":     lambda d, _: self._save_html(
                 d, scrape_dir, slug, report_ts_fmt,
-                recon=recon, interrupted=interrupted, assets_meta=assets_meta,
+                interrupted=interrupted, assets_meta=assets_meta,
             ),
         }
 
@@ -112,38 +103,6 @@ class Storage:
             writer = _writers.get(fmt)
             if writer:
                 paths[fmt] = writer(data, None)
-
-        if recon:
-            writer = ReconReportWriter(self._esc)
-            paths["recon_json"] = writer.save_json(recon, recon_dir)
-            paths["recon_html"] = writer.save_html(recon, data, recon_dir, slug, session_key)
-            if "markdown" in formats:
-                paths["recon_md"] = writer.save_markdown(recon, recon_dir, slug)
-            paths["intelligence"] = self._write_json_file(
-                os.path.join(recon_dir, "intelligence.json"),
-                recon.get("intelligence", []),
-            )
-            paths["findings"] = self._write_json_file(
-                os.path.join(recon_dir, "findings.json"),
-                recon.get("findings", []),
-            )
-            paths["session"] = self._write_json_file(
-                os.path.join(meta_dir, "session.json"),
-                {
-                    "session": recon.get("session"),
-                    "scope": recon.get("scope"),
-                    "endpoint_graph": recon.get("endpoint_graph"),
-                    "findings_count": recon.get("findings_count"),
-                    "active_recon": recon.get("active_recon"),
-                    "technology_profile": recon.get("technology_profile"),
-                    "interrupted": interrupted,
-                },
-            )
-
-        if artifact_store is not None:
-            paths["artifacts"] = artifact_store.persist(
-                os.path.join(artifacts_dir, "artifacts.json")
-            )
 
         paths["session_dir"] = session_dir
 
@@ -417,7 +376,6 @@ class Storage:
         session_dir: str,
         slug: str,
         ts_fmt: str,
-        recon: Optional[dict[str, Any]] = None,
         *,
         interrupted: bool = False,
         assets_meta: Optional[dict[str, Any]] = None,
@@ -439,7 +397,6 @@ class Storage:
         total_links = sum(len(p.get("links", [])) for p in data)
         total_images = sum(len(p.get("images", [])) for p in data)
 
-        recon_banner = self._recon_dashboard_banner(recon) if recon else ""
         interrupt_banner = ""
         if interrupted:
             interrupt_banner = """
@@ -457,14 +414,6 @@ class Storage:
         </div>
         <div class="assets-hint">See <code>assets/pdfs/</code> and <code>assets/sourcemaps/</code> in this scan folder.</div>
       </div>"""
-        recon_nav = ""
-        if recon:
-            recon_nav = """
-            <a href="../recon/recon_report.html" class="nav-item" target="_blank">
-                <span class="nav-dot" style="background:var(--warn);box-shadow:0 0 6px var(--warn)"></span>
-                <span class="nav-title">🔒 VAPT Recon Report</span>
-            </a>"""
-
         # ── Sidebar nav items ─────────────────────────────────────────────────
         nav_items = ""
         for i, page in enumerate(data):
@@ -914,38 +863,6 @@ class Storage:
     .stats-grid {{ grid-template-columns: repeat(2, 1fr); }}
   }}
 
-  /* recon banner on scrape dashboard */
-  .recon-banner {{
-    background: linear-gradient(135deg, rgba(0,212,170,0.1), rgba(255,107,74,0.08));
-    border: 1px solid rgba(0,212,170,0.35);
-    border-radius: var(--radius);
-    padding: 16px 20px;
-    margin-bottom: 20px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
-  }}
-  .recon-banner-title {{ font-weight: 700; font-size: 14px; }}
-  .recon-banner a {{
-    margin-left: auto;
-    padding: 8px 16px;
-    background: var(--accent);
-    color: #fff;
-    border-radius: 8px;
-    text-decoration: none;
-    font-size: 13px;
-    font-weight: 600;
-  }}
-  .recon-sev-pills {{ display: flex; gap: 8px; flex-wrap: wrap; }}
-  .recon-pill {{
-    padding: 3px 10px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 700;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-  }}
   .interrupt-banner {{
     background: rgba(251,191,36,0.12);
     border: 1px solid rgba(251,191,36,0.45);
@@ -999,7 +916,6 @@ class Storage:
         <span class="nav-dot" style="background:var(--accent);box-shadow:0 0 6px var(--accent)"></span>
         <span class="nav-title">📊 Overview Dashboard</span>
       </a>
-      {recon_nav}
       {nav_items}
     </div>
   </div>
@@ -1013,7 +929,6 @@ class Storage:
       <div class="dash-sub">Site: <strong>{self._esc(slug)}</strong> &nbsp;·&nbsp; {self._esc(ts_fmt)}</div>
 
       {interrupt_banner}
-      {recon_banner}
       {assets_banner}
 
       <div class="stats-grid">
@@ -1194,21 +1109,4 @@ class Storage:
         domain = parsed.netloc.replace("www.", "").replace(".", "_")
         return domain[:40] if domain else "scrape"
 
-    def _recon_dashboard_banner(self, recon: dict[str, Any]) -> str:
-        fc = recon.get("findings_count") or {}
-        total_findings = sum(fc.values())
-        pills = ""
-        for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
-            if fc.get(sev):
-                pills += f'<span class="recon-pill">{sev}: {fc[sev]}</span>'
-        obs = recon.get("observations_count", 0)
-        mode = recon.get("session", {}).get("mode", "passive")
-        return f"""
-      <div class="recon-banner">
-        <div>
-          <div class="recon-banner-title">🔒 VAPT Recon — {total_findings} finding(s) · {obs} observations · {self._esc(mode)} mode</div>
-          <div class="recon-sev-pills" style="margin-top:8px">{pills}</div>
-        </div>
-        <a href="../recon/recon_report.html" target="_blank">Open Full Recon Report →</a>
-      </div>"""
 

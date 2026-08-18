@@ -7,8 +7,6 @@ Layout:
             scans/
                 <YYYYMMDD_HHMMSS>_<scan_id>/
                     scrape/     report.html, data.json, ...
-                    recon/      findings, intelligence, recon reports
-                    artifacts/  artifacts.json
                     network/    per-page network debug dumps
                     assets/
                         pdfs/
@@ -59,8 +57,6 @@ class ScanSession:
         return {
             "root": base,
             "scrape": os.path.join(base, "scrape"),
-            "recon": os.path.join(base, "recon"),
-            "artifacts": os.path.join(base, "artifacts"),
             "network": os.path.join(base, "network"),
             "assets_pdfs": os.path.join(base, "assets", "pdfs"),
             "assets_sourcemaps": os.path.join(base, "assets", "sourcemaps"),
@@ -115,8 +111,6 @@ class ScanSession:
             "interrupted": interrupted,
             "layout": {
                 "scrape": "scrape/",
-                "recon": "recon/",
-                "artifacts": "artifacts/",
                 "network": "network/",
                 "assets": "assets/",
                 "meta": "meta/",

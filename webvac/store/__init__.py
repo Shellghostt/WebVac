@@ -1,5 +1,5 @@
-"""Artifact registry — exclusive handoff between collectors and analyzers."""
+"""Scan session storage."""
 
-from webvac.store.artifact_store import ArtifactStore
+from webvac.store.scan_session import ScanSession
 
-__all__ = ["ArtifactStore"]
+__all__ = ["ScanSession"]
