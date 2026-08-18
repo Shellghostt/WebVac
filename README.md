@@ -1,6 +1,6 @@
 # WebVac
 
-WebVac is an asyncio-powered dynamic web scraping and crawling tool built for modern JavaScript-heavy targets. It drives a real Chromium browser through Patchright, supports proxy rotation, robots handling, anti-bot resilience, optional login/session reuse, and exports rich scan artifacts in multiple formats.
+WebVac is an asyncio-powered dynamic web scraping and crawling tool built for modern JavaScript-heavy targets. It drives a real Chromium browser through Patchright, supports proxy rotation, robots handling, anti-bot resilience, optional login/session reuse, exports rich scan artifacts in multiple formats, and can optionally launch De-Caffeinator for VAPT-focused JavaScript reverse engineering.
 
 ## Highlights
 
@@ -19,6 +19,7 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Network debug dumps on scrape failures (per-scan `network/` folder)
 - Optional CapSolver auto-CAPTCHA (reCAPTCHA / hCaptcha / Turnstile)
 - Logout URL deny and sticky proxy when authenticated
+- Optional opt-in VAPT task powered by De-Caffeinator
 
 ## Project Structure
 
@@ -84,6 +85,7 @@ python -m webvac --doctor
 - proxy file parsing and optional health-check
 - pipeline file discovery
 - CapSolver key detection
+- De-Caffeinator root validation when `--task vapt` is selected
 
 If your proxy pool is present but dead, WebVac will warn and continue with a direct connection using your real IP.
 
@@ -128,10 +130,26 @@ python -m webvac --url https://example.com --mode single
 python -m webvac --url https://example.com --mode crawl --depth 3 --max-pages 50 --concurrency 2
 ```
 
+### VAPT task
+
+Use the opt-in VAPT task when you want De-Caffeinator analysis instead of the normal scrape flow:
+
+```bash
+python -m webvac --task vapt --url https://example.com
+```
+
+Deep browser + historical JS discovery:
+
+```bash
+python -m webvac --task vapt --url https://example.com \
+  --vapt-profile deep --vapt-playwright --vapt-wayback
+```
+
 ## Common CLI Options
 
 ### Core
 
+- `--task scrape|vapt`: Normal scrape flow or De-Caffeinator VAPT task
 - `--url`: Target URL (required)
 - `--mode single|crawl`: Single page or recursive internal crawl
 - `--engine dynamic|lightweight`: Browser-based or lightweight HTTP engine
@@ -208,6 +226,18 @@ python -m webvac --url https://example.com/dashboard --mode single \
 - `--cooldown-seconds SECS`: Cooldown after 429/timeout
 - If no proxy source is passed, WebVac auto-uses `./proxies.txt` when present
 - If configured proxies fail startup health-check, WebVac warns and falls back to a direct connection
+
+### VAPT task (De-Caffeinator)
+
+- `--task vapt`: Run De-Caffeinator instead of the normal scrape pipeline
+- `--decaffeinator-root DIR`: Path to De-Caffeinator (default: `./trial4/blob-unpacker`)
+- `--vapt-profile standard|quick|stealth|deep`
+- `--vapt-format json|jsonl`
+- `--vapt-playwright`: Enable SPA asset discovery in De-Caffeinator
+- `--vapt-wayback`: Enable historical JS discovery from Wayback
+- `--vapt-no-files`: Skip source/deobfuscated file writes
+
+VAPT task output is stored under the normal scan session path in `analysis/decaffeinator/`.
 
 Residential example:
 
