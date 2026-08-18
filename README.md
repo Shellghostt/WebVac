@@ -21,6 +21,18 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Logout URL deny and sticky proxy when authenticated
 - Optional opt-in VAPT task powered by De-Caffeinator
 
+## Release
+
+Current release: `0.3.0`
+
+Highlights in `0.3.0`:
+- De-Caffeinator integration via `--task vapt`
+- session-scoped VAPT output under `analysis/decaffeinator/`
+- improved `--doctor` preflight checks for both scrape and VAPT workflows
+- streamlined scrape-only core after removing the old in-tree VAPT stack
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the release summary.
+
 ## Project Structure
 
 All application code lives in the installable `webvac/` package. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md).
@@ -360,7 +372,7 @@ python -m unittest discover -s tests -p "test_*.py"
 ## Current Default Behavior
 
 - Scrape pipeline is enabled.
-- Default output formats are `json,csv,html`.
+- Default output formats are `json,html`.
 
 ## Troubleshooting
 
@@ -398,4 +410,4 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ## License
 
-Add your preferred license file and update this section accordingly.
+This project is licensed under the [MIT License](LICENSE).
