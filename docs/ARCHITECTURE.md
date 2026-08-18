@@ -1,15 +1,13 @@
 # WebVac — Full System Architecture
 
 **Last updated:** 2026-07-27  
-**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [VAPT Pipeline](architecture/VAPT.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
+**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
 
 ---
 
 ## 1. Purpose
 
 WebVac is an **asyncio** scraper that drives real Chromium (via **Patchright**) to crawl JavaScript-heavy sites, optionally authenticate, rotate proxies, bypass CDN-to-origin when authorized, and export multi-format historical scan artifacts.
-
-A full **VAPT/recon stack** (collectors → analyzers → findings → active probes) is implemented in-tree but **disabled by default** (`vapt_enabled: False`) and not yet hooked into the main CLI scrape path.
 
 ---
 
@@ -72,14 +70,6 @@ flowchart TB
     Assets[utils/asset_downloader.py]
   end
 
-  subgraph vaptLayer [VAPT Overlay — default OFF]
-    Coll[collectors/]
-    Ana[analyzers/]
-    Find[findings/]
-    Active[active/]
-    Runner[core/runner.py]
-  end
-
   RunPy --> Scraper
   Scraper --> AM
   Scraper --> Crawler
@@ -99,11 +89,6 @@ flowchart TB
   Pipe --> Store
   Store --> Scan
   Crawler --> Assets
-  Crawler -.-> Coll
-  Coll -.-> Ana
-  Ana -.-> Find
-  Find -.-> Active
-  Runner -.-> Store
 ```
 
 ---
@@ -146,31 +131,24 @@ sequenceDiagram
 | Package | Responsibility |
 |---------|----------------|
 | `run.py` | Interactive launcher → builds argv → invokes scraper |
-| `core/` | CLI orchestration, BFS crawler, per-page flow, user pipelines, VAPT runner |
+| `core/` | CLI orchestration, BFS crawler, per-page flow, user pipelines |
 | `auth/` | Login, sessions, MFA, walls, profiles |
 | `utils/` | Browser pool, proxies, robots, detection, origin probe, network debug, screenshots, assets |
-| `data/` | HTML parse, page records, multi-format export, recon report writer |
-| `config/` | Defaults + VAPT scan profiles |
+| `data/` | HTML parse, page records, multi-format export |
+| `config/` | Defaults |
 | `scope/` | Domain / depth / URL allow-deny |
-| `store/` | Scan folder layout + artifact store |
-| `models/` | Typed artifacts, findings, intelligence, scan metadata |
-| `collectors/` | VAPT page/session collectors (plugin discovery) |
-| `analyzers/` | VAPT intelligence extractors |
-| `findings/` | Rule engine → security findings |
-| `active/` | Opt-in active probes |
-| `intelligence/` | Deduped observation store |
-| `graph/` | Endpoint parent/child graph |
+| `store/` | Scan folder layout |
+| `models/` | Scan metadata and typed records |
 | `tests/` | Unit + e2e coverage |
 | `docs/` | Architecture & change docs |
 
 ---
 
-## 6. Two pipelines (do not confuse)
+## 6. Pipeline
 
 | Pipeline | Module | Status |
 |----------|--------|--------|
 | **User scrape pipeline** | `core/pipeline.py` (`PipelineManager`) | **Active** — `--pipeline-file` mutates page dicts before save |
-| **VAPT recon pipeline** | `core/runner.py` (`PipelineRunner`) | **Built, default OFF, not CLI-wired** |
 
 ---
 
@@ -180,15 +158,11 @@ sequenceDiagram
 flowchart LR
   Defaults["config/config.py DEFAULT_CONFIG"] --> Session["session_config dict"]
   CLI["argparse in scraper"] --> Session
-  Profiles["scan_profiles.py"] -.->|VAPT only| Session
   Session --> Crawler
-  Session --> Collectors
-  Session --> Analyzers
 ```
 
 Important defaults:
 
-- `vapt_enabled: False`
 - Scrape formats: `json,csv,html`
 - Crawl respects robots unless `--no-robots`
 - Auth wall policy default: `skip`
@@ -204,8 +178,6 @@ scraped_data/
       <timestamp>_<scan_id>/
         scrape/       # data.json, data.csv, report.html, …
         network/      # failure / challenge network dumps
-        recon/        # VAPT (when enabled + wired)
-        artifacts/    # VAPT raw artifacts
         assets/
           pdfs/
           sourcemaps/
@@ -262,19 +234,17 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 | Multi-format export | Active |
 | PDF / sourcemap download | Active |
 | User `PipelineManager` | Active |
-| Collectors / analyzers / findings | Implemented, default OFF |
-| `PipelineRunner` in CLI | Not wired |
 | `api_fuzzer` | Not implemented |
 
 ---
 
 ## 11. Design principles
 
-1. **Scrape spine first** — browser crawl + page records must work without VAPT.
+1. **Scrape spine first** — browser crawl + page records are the core path.
 2. **Auth is a facade** — engines stay swappable behind `AuthManager`.
 3. **Slot isolation** — concurrency via contexts, not tabs in one profile.
 4. **Additive CLI** — new flags never break existing `--login` / `--session-file`.
-5. **Security gated** — VAPT and active probes stay opt-in.
+5. **Security gated** — invasive behaviors stay opt-in.
 6. **Historical scans** — every run is a versioned session folder under the target.
 
 ---
@@ -287,6 +257,5 @@ Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no vol
 | [architecture/CRAWL.md](architecture/CRAWL.md) | Crawler, page flow, browser pool |
 | [architecture/DATA.md](architecture/DATA.md) | Parse, records, storage, scan layout |
 | [architecture/PROXY_ORIGIN.md](architecture/PROXY_ORIGIN.md) | Proxies, robots, manual origin IP |
-| [architecture/VAPT.md](architecture/VAPT.md) | Collectors → analyzers → findings |
 
 Open the visual one-pager: [`webvac-architecture-one-page.html`](webvac-architecture-one-page.html).

@@ -22,7 +22,7 @@ This release is a full **Auth Logic Overhaul** (17 features) plus supporting cra
 | `mfa.py` | TOTP via `pyotp`; interactive OTP / CAPTCHA pause |
 | `wall.py` | Auth-wall heuristics + `abort` \| `skip` \| `relogin` policy; logout URL patterns |
 | `credentials.py` | `WEBVAC_USER` / `WEBVAC_PASS`; CLI redaction helpers |
-| `cookie_audit.py` | HttpOnly / Secure / SameSite warnings (login + VAPT) |
+| `cookie_audit.py` | HttpOnly / Secure / SameSite warnings |
 | `auth.py` | Patchright login engine |
 | `popups.py` | Cookie/privacy popup dismiss helpers |
 
@@ -35,10 +35,9 @@ Existing engines kept: `auth/auth.py` (Patchright), called by AuthManager.
 - **`core/page_scrape_flow.py`**: Mid-crawl auth-wall detection with abort/skip/relogin.
 - **`utils/browser.py`**: Capture/broadcast `storage_state` across slots so crawl workers keep the login session.
 
-### 1.3 Security / VAPT
+### 1.3 Security
 
 - Lightweight cookie-flag warnings after login (always available).
-- Auth analyzer extended with cookie-flag intelligence **only when `vapt_enabled`**.
 - `.gitignore` excludes `auth_creds.json`, `sessions/`, `proxies.txt`.
 - Dependencies: `pyotp`, `cryptography`.
 
@@ -83,7 +82,7 @@ Existing engines kept: `auth/auth.py` (Patchright), called by AuthManager.
 | 14 | Force dynamic engine when `--login` | Done |
 | 15 | Unified AuthManager | Done |
 | 16 | Env creds + optional Fernet sessions | Done |
-| 17 | Cookie flag audit (login warn + VAPT-gated) | Done |
+| 17 | Cookie flag audit | Done |
 
 ### 1.6 Commits pushed to GitHub
 
@@ -97,7 +96,7 @@ Existing engines kept: `auth/auth.py` (Patchright), called by AuthManager.
 8. Add pyotp and cryptography for TOTP and session encryption  
 9. Wire AuthManager and additive auth CLI flags into scraper  
 10. Handle mid-crawl auth walls, logout deny, and pinned proxies  
-11. Extend auth analyzer with VAPT-gated cookie flag findings  
+11. Extend cookie flag audit coverage  
 12. Extend interactive launcher and example auth profile JSON  
 13. Add unit tests for session store, wall, profile, and cookie audit  
 14. Document AuthManager CLI flags, env vars, and security notes  
@@ -130,7 +129,7 @@ Ideas are grouped by problem. Prefer **libraries / patterns to borrow** over who
 | [projectdiscovery/katana](https://github.com/projectdiscovery/katana) | Fast URL/JS endpoint discovery to seed your crawl graph. |
 | [projectdiscovery/httpx](https://github.com/projectdiscovery/httpx) | Probe liveness, titles, tech before expensive browser crawls. |
 | [GerbenJavado/LinkFinder](https://github.com/GerbenJavado/LinkFinder) | Extract endpoints from JS bundles (pairs with your sourcemap/PDF asset work). |
-| [xnl-h4ck3r/xnLinkFinder](https://github.com/xnl-h4ck3r/xnLinkFinder) | Stronger JS link/param discovery for recon mode. |
+| [xnl-h4ck3r/xnLinkFinder](https://github.com/xnl-h4ck3r/xnLinkFinder) | Stronger JS link/param discovery for large crawl coverage. |
 
 ### 2.3 Proxies, rate limits, resilience
 
@@ -165,13 +164,13 @@ Ideas are grouped by problem. Prefer **libraries / patterns to borrow** over who
 | [prometheus/client_python](https://github.com/prometheus/client_python) | Metrics for pages/sec, auth-wall hits, proxy failures. |
 | Playwright **trace viewer** | Record `--no-headless` failures as traces for debugging login/crawl. |
 
-### 2.7 Security / recon (optional VAPT path)
+### 2.7 Security
 
 | Project | Why it helps |
 |---------|----------------|
 | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei) | Template scans against discovered endpoints (keep gated). |
 | [OWASP/CheatSheetSeries](https://github.com/OWASP/CheatSheetSeries) | Cookie/session flag guidance for `cookie_audit`. |
-| [zaproxy/zaproxy](https://github.com/zaproxy/zaproxy) | Passive spider/passive scan ideas for analyzer design. |
+| [zaproxy/zaproxy](https://github.com/zaproxy/zaproxy) | Passive spider/passive scan ideas for scraper-side observability and review workflows. |
 
 ---
 
@@ -192,7 +191,6 @@ Ideas are grouped by problem. Prefer **libraries / patterns to borrow** over who
 - No `--login` → auth behavior unchanged.  
 - Default `--on-auth-wall` is `skip`.  
 - Auth is Patchright-only (Nodriver removed); crawl stays Patchright.
-- Do not enable VAPT globally by default.  
 - Never commit real `auth_creds.json` or live session files.
 
 ---

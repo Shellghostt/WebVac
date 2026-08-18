@@ -22,20 +22,14 @@ WebVac/
     ├── cli/
     │   ├── scraper.py          # CLI orchestrator
     │   └── interactive.py      # menu launcher
-    ├── core/                   # crawler, page flow, pipelines, VAPT runner
+    ├── core/                   # crawler, page flow, pipelines
     ├── auth/                   # AuthManager, sessions, MFA, walls
     ├── utils/                  # browser, proxies, origin probe, robots, network debug, …
     ├── data/                   # parse, page records, storage
     ├── config/
     ├── models/
     ├── store/
-    ├── scope/
-    ├── graph/
-    ├── intelligence/
-    ├── collectors/             # VAPT collectors (default off)
-    ├── analyzers/
-    ├── findings/
-    └── active/
+    └── scope/
 ```
 
 ## Entry points

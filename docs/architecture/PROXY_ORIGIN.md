@@ -162,7 +162,7 @@ Each dump’s `summary.challenge_classification` tags traffic as:
 | Soft rate limit | Delay + sticky rotate |
 | Hard bot wall | Stealth → proxy rotate → CAPTCHA |
 | Authenticated crawl | Pin proxy; avoid voluntary rotate |
-| Authorized origin recon | `--origin-ip` (manual only) |
+| Authorized origin access | library-only origin access flow |
 
 ---
 

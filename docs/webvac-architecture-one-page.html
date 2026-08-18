@@ -64,7 +64,6 @@
     .hdr-crawl   { background: #0d6efd; }
     .hdr-browser { background: #198754; }
     .hdr-data    { background: #6f42c1; }
-    .hdr-vapt    { background: #dc3545; }
     .hdr-support { background: #fd7e14; }
 
     .layer-body { padding: 6px 8px; background: #fafbfc; }
@@ -102,20 +101,6 @@
       gap: 8px;
       margin-top: 8px;
     }
-    .vapt-layer { opacity: 0.92; }
-    .vapt-layer .layer-body { background: #fff5f5; }
-    .badge-off {
-      display: inline-block;
-      background: #ffc107;
-      color: #664d03;
-      font-size: 7px;
-      font-weight: 700;
-      padding: 1px 5px;
-      border-radius: 3px;
-      margin-left: 4px;
-      vertical-align: middle;
-    }
-
     .features {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -161,7 +146,7 @@
       </div>
       <div class="meta">
         <div><strong>Stack:</strong> Python 3.12 · asyncio · Patchright · aiohttp</div>
-        <div><strong>Mode:</strong> Scrape-only (VAPT pipeline built, disabled)</div>
+        <div><strong>Mode:</strong> Scrape-focused runtime</div>
         <div><strong>Repo:</strong> D:\WebVac</div>
       </div>
     </header>
@@ -196,7 +181,7 @@
           </div>
           <div class="box">
             <div class="box-title">config/config.py</div>
-            <div class="box-desc">Defaults: timeouts, concurrency, proxy strategy, VAPT flags.</div>
+            <div class="box-desc">Defaults: timeouts, concurrency, proxy strategy.</div>
           </div>
         </div>
       </div>
@@ -284,28 +269,27 @@
             </div>
           </div>
 
-          <!-- VAPT -->
-          <div class="layer vapt-layer">
-            <div class="layer-hdr hdr-vapt">⑤ VAPT Pipeline <span class="badge-off">DISABLED</span></div>
+          <div class="layer">
+            <div class="layer-hdr hdr-support">⑤ Runtime Support</div>
             <div class="layer-body">
               <div class="box">
-                <div class="box-title">collectors/</div>
-                <div class="box-desc">HTTP, HTML, JS, network, storage capture during crawl.</div>
+                <div class="box-title">config/config.py</div>
+                <div class="box-desc">Session defaults, crawl limits, output settings.</div>
               </div>
               <div class="box">
-                <div class="box-title">analyzers/ + findings/</div>
-                <div class="box-desc">Headers, cookies, OAuth, GraphQL, secrets, misconfigs.</div>
+                <div class="box-title">store/scan_session.py</div>
+                <div class="box-desc">Versioned scan folders and metadata layout.</div>
               </div>
               <div class="box">
-                <div class="box-title">active/ + core/runner.py</div>
-                <div class="box-desc">Active probes (.git, .env, swagger) · post-crawl orchestration.</div>
+                <div class="box-title">utils/network_debug.py</div>
+                <div class="box-desc">Failure diagnostics and network dumps for blocked pages.</div>
               </div>
             </div>
           </div>
         </div>
 
         <footer>
-          <span>WebVac — Internal web scraper &amp; recon framework</span>
+          <span>WebVac — Dynamic web scraping framework</span>
           <span>Generate PDF: python scripts/generate_architecture_pdf.py</span>
         </footer>
       </div>
@@ -320,7 +304,6 @@
       scrape/   ← JSON, CSV, report.html
       assets/   ← PDFs, sourcemaps, screenshots
       meta/     ← session metadata
-      recon/    ← VAPT findings
     diffs/      ← vs previous scan</div>
           </div>
         </div>
@@ -337,8 +320,6 @@
               <div class="feat"><span class="feat-ok">✓</span> JSON/CSV/HTML reports</div>
               <div class="feat"><span class="feat-ok">✓</span> Login &amp; sessions</div>
               <div class="feat"><span class="feat-ok">✓</span> Scan history &amp; diffs</div>
-              <div class="feat"><span class="feat-off">○</span> VAPT collectors</div>
-              <div class="feat"><span class="feat-off">○</span> Active recon probes</div>
             </div>
           </div>
         </div>

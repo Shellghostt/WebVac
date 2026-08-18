@@ -19,7 +19,6 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Network debug dumps on scrape failures (per-scan `network/` folder)
 - Optional CapSolver auto-CAPTCHA (reCAPTCHA / hCaptcha / Turnstile)
 - Logout URL deny and sticky proxy when authenticated
-- Optional VAPT/recon via `--vapt` / `--profile` (collectors → analyzers → findings; default off)
 
 ## Project Structure
 
@@ -27,12 +26,11 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 
 - `run.py`: Thin shim → interactive menu (`webvac.cli.interactive`)
 - `webvac/cli/scraper.py`: Main CLI orchestrator (`python -m webvac`)
-- `webvac/core/`: BFS crawler, page scrape flow, pipelines, VAPT runner
+- `webvac/core/`: BFS crawler, page scrape flow, pipelines
 - `webvac/auth/`: AuthManager, sessions, MFA, auth-wall detection
 - `webvac/captcha/`: CapSolver detect → extract → solve → inject (optional)
 - `webvac/utils/`: Browser, proxies, robots, origin probe, screenshots, network debug, humanize
 - `webvac/data/`: HTML parse, page records, storage/export
-- `webvac/collectors|analyzers|findings|active/`: Optional VAPT stack (default off)
 - `examples/`: Input templates (auth, proxies, session, pipeline) — see [`examples/README.md`](examples/README.md)
 - `docs/`, `tests/`, `scripts/`
 
@@ -47,6 +45,7 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 1. Clone the repository.
 2. Create and activate a virtual environment.
 3. Install dependencies.
+4. Install Patchright browser binaries.
 
 ### Windows PowerShell
 
@@ -55,6 +54,7 @@ python -m venv .venv
 (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& .\.venv\Scripts\Activate.ps1)
 pip install -r requirements.txt
 pip install -e .
+python -m patchright install
 ```
 
 ### Linux/macOS
@@ -64,9 +64,28 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
+python -m patchright install
 ```
 
 `pip install -e .` registers the `webvac` and `webvac-menu` console scripts and makes imports resolve as `webvac.*`.
+
+## First Run Checklist
+
+Run the built-in preflight before your first scrape:
+
+```bash
+python -m webvac --doctor
+```
+
+`--doctor` checks:
+- Python/runtime availability
+- Patchright browser launch
+- output directory write access
+- proxy file parsing and optional health-check
+- pipeline file discovery
+- CapSolver key detection
+
+If your proxy pool is present but dead, WebVac will warn and continue with a direct connection using your real IP.
 
 ## Example input files
 
@@ -91,7 +110,13 @@ python run.py
 # or: webvac-menu
 ```
 
-The launcher helps you choose scrape mode, output formats, robots strategy, proxy mode, and browser visibility.
+The launcher helps you choose scrape mode, browser visibility, login/session options, and common runtime settings.
+
+Recommended first command:
+
+```bash
+python -m webvac --doctor
+```
 
 ### Direct CLI usage
 
@@ -181,6 +206,8 @@ python -m webvac --url https://example.com/dashboard --mode single \
 - `--proxy-playbook none|residential|datacenter`: Named sticky/cooldown/geo defaults (residential = sticky 25 + UA/geo/tz pin)
 - `--sticky-requests N`: Successful requests before voluntary rotate (`0` = stay on the same proxy)
 - `--cooldown-seconds SECS`: Cooldown after 429/timeout
+- If no proxy source is passed, WebVac auto-uses `./proxies.txt` when present
+- If configured proxies fail startup health-check, WebVac warns and falls back to a direct connection
 
 Residential example:
 
@@ -191,20 +218,6 @@ python -m webvac --url https://example.com --mode crawl \
 
 Each proxy line gets a locked UA + matching US city geolocation/timezone. Use provider session usernames for ISP sticky IPs (see `examples/proxies.example.txt`).
 - `--no-health-check`: Skip startup benchmark
-
-### VAPT / recon (optional)
-
-Default scrape is unchanged. Enable the collectors → analyzers → findings pipeline with:
-
-- `--vapt`: Enable with `standard` profile
-- `--profile quick|standard|deep|bugbounty`: Named collector/analyzer bundle (implies VAPT)
-- `--active-recon`: Out-of-band probes (interesting files, GraphQL, OPTIONS); implies VAPT
-
-```bash
-python -m webvac --url https://example.com --mode crawl --profile standard
-```
-
-Recon JSON/HTML lands under the scan directory alongside scrape output. See [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md).
 
 ### Network diagnosis (default on)
 
@@ -288,7 +301,6 @@ scraped_data/
 - [`docs/architecture/CRAWL.md`](docs/architecture/CRAWL.md) — Crawler, page flow, browser pool
 - [`docs/architecture/DATA.md`](docs/architecture/DATA.md) — Parsing, page records, storage layout
 - [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, manual origin IP
-- [`docs/architecture/VAPT.md`](docs/architecture/VAPT.md) — Optional collectors → analyzers → findings
 - [`docs/CHANGES_AND_IMPROVEMENTS.md`](docs/CHANGES_AND_IMPROVEMENTS.md) — Recent changes + improvement ideas
 - [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — One-page visual architecture
 
@@ -318,7 +330,6 @@ python -m unittest discover -s tests -p "test_*.py"
 ## Current Default Behavior
 
 - Scrape pipeline is enabled.
-- VAPT/recon modules exist but are disabled by default in configuration.
 - Default output formats are `json,csv,html`.
 
 ## Troubleshooting

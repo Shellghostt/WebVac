@@ -115,7 +115,7 @@ stateDiagram-v2
 | `mfa.py` | TOTP generation + interactive OTP/CAPTCHA pause |
 | `wall.py` | Heuristics for login pages + logout URL deny |
 | `popups.py` | Cookie/consent banner dismiss |
-| `cookie_audit.py` | Flag warnings after login; VAPT reuse |
+| `cookie_audit.py` | Flag warnings after login |
 | `default_creds.py` | Vendor default-panel fingerprints |
 
 ---

@@ -26,7 +26,7 @@ flowchart TB
   Flow --> Det[detection]
   Flow --> Auth[AuthManager walls]
   Flow --> Collect[_collect_page]
-  Collect --> Parser[HtmlPageParser / collectors]
+  Collect --> Parser[HtmlPageParser]
   BM --> Slot0[BrowserSlot 0]
   BM --> SlotN[BrowserSlot N]
 ```
@@ -72,10 +72,7 @@ flowchart TD
   LW -->|bot/block| Dyn[fall through to dynamic]
   Engine -->|dynamic| Dyn
   Dyn --> Page[browser.new_page slot]
-  Page --> Net{VAPT network collector?}
-  Net -->|yes| Attach[NetworkCollector.attach]
-  Net -->|no| Goto
-  Attach --> Goto[page.goto]
+  Page --> Goto[page.goto]
   Goto --> After[_after_goto challenge wait]
   After --> AuthW[auth-wall check]
   AuthW -->|abort/skip/relogin| AuthOut[policy branch]
@@ -168,17 +165,12 @@ flowchart LR
 
 ---
 
-## 9. Collection branch (scrape vs VAPT)
+## 9. Collection branch
 
 ```mermaid
 flowchart TD
-  HTML[page.content] --> V{vapt_enabled?}
-  V -->|no| PR[PageRecordBuilder.from_html]
-  V -->|yes| CE[CollectorEngine.collect_page]
-  CE --> ART[ArtifactStore]
-  ART --> PR2[PageRecordBuilder.from_artifacts]
+  HTML[page.content] --> PR[PageRecordBuilder.from_html]
   PR --> Dict[page dict]
-  PR2 --> Dict
 ```
 
-Default path never requires collectors.
+The default path builds page records directly from scraped HTML.

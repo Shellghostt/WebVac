@@ -66,7 +66,6 @@ This release packages WebVac as an installable `webvac/` module, removes Nodrive
 ### Critical
 | Gap | Impact |
 |-----|--------|
-| VAPT stack | Wired via `--vapt` / `--profile`; default OFF |
 | No MCP / job API | No start/status/cancel/result for remote BAS |
 | Headless-safe auth incomplete | OTP, CAPTCHA, bootstrap, pause-for-consent still need a human |
 
@@ -91,11 +90,10 @@ Interactive menu still prompts for format, robots, wait-until, origin IP, proxie
 
 ## 4. Recommended next priorities
 
-1. **P0** — Wire `PipelineRunner` + `--vapt` / scan profiles  
-2. **P0** — Library job API (start / status / cancel / result)  
-3. **P0** — Headless-safe auth mode (no prompts; fail hard)  
-4. **P1** — MCP server + Linux container  
-5. **P2** — Expand CMP known-site list; slim remaining menu prompts  
+1. **P0** — Library job API (start / status / cancel / result)  
+2. **P0** — Headless-safe auth mode (no prompts; fail hard)  
+3. **P1** — MCP server + Linux container  
+4. **P2** — Expand CMP known-site list; slim remaining menu prompts  
 
 See also: [`docs/BAS_MCP_LINUX_ROADMAP.md`](BAS_MCP_LINUX_ROADMAP.md).
 

@@ -7,7 +7,7 @@
 
 ## 1. Goals
 
-- Turn raw HTML (or VAPT artifacts) into a stable **page record** dict.
+- Turn raw HTML into a stable **page record** dict.
 - Persist versioned scan sessions with multi-format exports.
 - Diff against prior scans and download discovered assets.
 
@@ -18,7 +18,6 @@
 ```mermaid
 flowchart LR
   Page[Browser page HTML] --> Parser[HtmlPageParser]
-  Arts[ArtifactStore] --> Builder[PageRecordBuilder]
   Parser --> Builder
   Builder --> Dict[page dict]
   Dict --> Pipe[PipelineManager optional]
@@ -26,7 +25,6 @@ flowchart LR
   Results --> Storage[Storage.save]
   Results --> Assets[AssetDownloader]
   Storage --> Layout[ScanSession folders]
-  Arts --> Layout
 ```
 
 ---
@@ -50,9 +48,8 @@ flowchart TD
 | Module | Role |
 |--------|------|
 | `data/html_parser.py` | DOM extraction |
-| `data/page_record.py` | `PageRecordBuilder.from_html` / `from_artifacts` |
+| `data/page_record.py` | `PageRecordBuilder.from_html` |
 | `core/pipeline.py` | User post-process hooks |
-| `models/artifacts.py` | Typed VAPT artifacts |
 | `models/scan.py` | `ScanMetadata`, `TargetMetadata` |
 
 ---
@@ -68,8 +65,6 @@ flowchart TB
   Scan --> Network[network/]
   Scan --> Meta[meta/]
   Scan --> Assets[assets/]
-  Scan --> Recon[recon/]
-  Scan --> Artifacts[artifacts/]
 ```
 
 `store/scan_session.py` owns path helpers and parent-scan chaining (`--parent-scan-id`).
@@ -126,16 +121,6 @@ classDiagram
     emails
     status
   }
-  class BaseArtifact {
-    page_url
-    artifact_type
-  }
-  class CookieArtifact
-  class HtmlArtifact
-  class HTTPResponseArtifact
-  BaseArtifact <|-- CookieArtifact
-  BaseArtifact <|-- HtmlArtifact
-  BaseArtifact <|-- HTTPResponseArtifact
   ScanMetadata --> PageRecord : produces many
 ```
 

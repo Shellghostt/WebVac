@@ -1,4 +1,8 @@
-# Architecture documentation index
+# Documentation index
+
+For installation, first-run checks, and normal usage, start with the root [`README.md`](../README.md).
+
+The documents below are mostly developer and architecture references.
 
 | Document | Description |
 |----------|-------------|
@@ -10,7 +14,6 @@
 | [architecture/CRAWL.md](architecture/CRAWL.md) | BFS crawler, page_scrape_flow, browser pool, anti-block |
 | [architecture/DATA.md](architecture/DATA.md) | HTML parse, page records, scan layout, exports |
 | [architecture/PROXY_ORIGIN.md](architecture/PROXY_ORIGIN.md) | Proxies, robots, manual origin IP bypass |
-| [architecture/VAPT.md](architecture/VAPT.md) | Collectors → analyzers → findings (default OFF) |
 | [CHANGES_AND_IMPROVEMENTS.md](CHANGES_AND_IMPROVEMENTS.md) | Change log + external repo ideas |
 | [webvac-architecture-one-page.html](webvac-architecture-one-page.html) | Visual one-pager |
 

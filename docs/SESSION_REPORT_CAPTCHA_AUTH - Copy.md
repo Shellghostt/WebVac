@@ -108,19 +108,3 @@ python -m webvac --url https://www.spacex.com/ --crawl --no-robots
 Interactive menu: choose CapSolver / robots bypass as prompted.
 
 ---
-
-## 7. Gaps / follow-ups
-
-| Item | Notes |
-|------|--------|
-| Live CapSolver success rates | Site-dependent (Turnstile action, risk score, proxy) |
-| Cloudflare **challenge** pages (not widget Turnstile) | Different CapSolver task family; not the form-widget path |
-| Alternate solvers (2captcha API) | Patterns borrowed; provider remains CapSolver |
-| Broader host Turnstile action map | Prefer page detect; fallback map is optional |
-
----
-
-## 8. Files to exclude from commit
-
-- `capsolver.key`, `sessions/`, `scraped_data/`, `__pycache__/`
-- Local binaries such as `arc.png` (unless intentionally added as an asset)
