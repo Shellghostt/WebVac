@@ -1,28 +1,30 @@
-# WebVac — Full System Architecture
+# WebVac — full system architecture
 
-**Last updated:** 2026-07-27  
-**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [Changelog](../CHANGELOG.md)
+**Version:** 0.3.0  
+**Related:** [Overview](OVERVIEW.md) · [Workflows](WORKFLOWS.md) · [Crawl](architecture/CRAWL.md) · [Auth](architecture/AUTH.md) · [Captcha](architecture/CAPTCHA.md) · [Proxy](architecture/PROXY_ORIGIN.md) · [Browser](architecture/BROWSER.md) · [Network](architecture/NETWORK.md) · [Data](architecture/DATA.md) · [VAPT](architecture/VAPT.md) · [Changelog](../CHANGELOG.md)
 
 ---
 
 ## 1. Purpose
 
-WebVac is an **asyncio** scraper that drives real Chromium (via **Patchright**) to crawl JavaScript-heavy sites, optionally authenticate, rotate proxies, bypass CDN-to-origin when authorized, and export multi-format historical scan artifacts.
+WebVac is an **asyncio** scraper that drives real Chromium (via **Patchright**) to crawl JavaScript-heavy sites, optionally authenticate, rotate proxies, auto-solve widget CAPTCHAs (CapSolver), diagnose network failures, and export multi-format historical scan artifacts. An opt-in **VAPT** task shells out to De-Caffeinator for JS analysis.
 
 ---
 
-## 2. High-level system context
+## 2. System context
 
 ```mermaid
 flowchart LR
-  User["Operator"] --> Run["run.py menu"]
+  User["Operator"] --> Menu["run.py / webvac-menu"]
   User --> CLI["python -m webvac"]
-  Run --> CLI
-  CLI --> WebVac["WebVac Runtime"]
-  WebVac --> Target["Target Website"]
-  WebVac --> Proxy["Proxy Pool"]
-  WebVac --> Disk["scraped_data/"]
-  WebVac --> Sess["sessions/ storage_state"]
+  Menu --> CLI
+  CLI --> Runtime["WebVac Runtime"]
+  Runtime --> Target["Target website"]
+  Runtime --> Proxy["Proxy pool"]
+  Runtime --> CapAPI["CapSolver API"]
+  Runtime --> Disk["scraped_data/"]
+  Runtime --> Sess["sessions/"]
+  Runtime -->|task=vapt| Decaf["decaffeinator/blob-unpacker"]
 ```
 
 ---
@@ -31,69 +33,76 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  subgraph entry [Entry Layer]
+  subgraph entry [Entry]
     RunPy[run.py]
-    Scraper[webvac/cli/scraper.py]
+    Interactive[cli/interactive.py]
+    Scraper[cli/scraper.py]
   end
 
-  subgraph authLayer [Auth Layer]
+  subgraph authLayer [Auth]
     AM[auth/manager.py]
-    Engines[auth engines + session]
+    Wall[auth/wall.py]
+    SessStore[auth/session_store.py]
   end
 
-  subgraph crawlLayer [Crawl Layer]
+  subgraph captchaLayer [Captcha]
+    CapMgr[captcha/manager.py]
+    CapProv[providers/capsolver.py]
+  end
+
+  subgraph crawlLayer [Crawl]
     Crawler[core/crawler.py]
     Flow[core/page_scrape_flow.py]
-    Scope[scope/scope_manager.py]
     Pipe[core/pipeline.py]
   end
 
-  subgraph browserLayer [Browser & Resilience]
+  subgraph browserLayer [Browser]
     BM[utils/browser.py]
     Pool[utils/browser_pool.py]
+    Hum[utils/humanize.py]
     Det[utils/detection.py]
-    Cap[utils/screenshot.py]
   end
 
-  subgraph netLayer [Network Policy]
+  subgraph netLayer [Network policy]
     Proxy[utils/proxy.py]
     Robots[utils/robots.py]
     Origin[utils/origin_probe.py]
-    NetDbg[utils/network_debug.py]
+    NetL[utils/network_listener.py]
+    NetD[utils/network_debug.py]
   end
 
-  subgraph dataLayer [Data Layer]
+  subgraph dataLayer [Data]
     Parse[data/html_parser.py]
     Rec[data/page_record.py]
     Store[data/storage.py]
     Scan[store/scan_session.py]
-    Assets[utils/asset_downloader.py]
   end
 
-  RunPy --> Scraper
+  subgraph vaptLayer [VAPT]
+    DecafMod[vapt/decaffeinator.py]
+  end
+
+  RunPy --> Interactive --> Scraper
+  Scraper -->|vapt| DecafMod
   Scraper --> AM
   Scraper --> Crawler
-  AM --> Engines
   AM --> BM
   Crawler --> Flow
-  Crawler --> Scope
   Flow --> BM
   Flow --> Det
-  Flow --> AM
+  Flow --> Wall
+  Flow --> CapMgr
+  CapMgr --> CapProv
+  Flow --> NetL
+  NetL --> NetD
   Crawler --> Proxy
   Crawler --> Robots
-  Crawler --> Origin
-  Flow --> Parse
-  Parse --> Rec
-  Rec --> Pipe
-  Pipe --> Store
-  Store --> Scan
-  Crawler --> Assets
+  Flow --> Parse --> Rec --> Pipe --> Store --> Scan
 ```
 
 ---
 
-## 4. End-to-end runtime sequence
+## 4. End-to-end runtime sequence (scrape)
 
 ```mermaid
 sequenceDiagram
@@ -104,158 +113,131 @@ sequenceDiagram
   participant A as AuthManager
   participant C as Crawler
   participant F as page_scrape_flow
+  participant Cap as CapSolverManager
   participant St as Storage
 
-  U->>S: CLI / run.py args
-  S->>P: load + optional benchmark
-  S->>B: start N slots
-  opt login / session / bootstrap
-    S->>A: restore | login | bootstrap
+  U->>S: CLI / menu argv
+  S->>P: load proxies + optional health-check
+  Note over P: all dead → continue direct IP
+  S->>B: start N concurrent slots
+  opt login or session restore
+    S->>A: restore | login
     A->>B: broadcast storage_state
   end
   S->>C: scrape_single | scrape_site
   loop each URL batch
     C->>F: run_page_scrape(url, slot)
-    F->>B: new_page + goto
-    F->>A: auth-wall check if authed
-    F-->>C: page record dict
+    F->>B: new_page + warmup + goto
+    F->>A: auth-wall check first
+    alt bot detected
+      F->>Cap: try_solve_on_page
+      Cap-->>F: inject / reload or fail
+      F->>B: stealth retry / evasion
+    end
+    F->>F: consent + humanize + scroll + collect
+    F-->>C: page record
   end
-  S->>St: save formats
+  S->>St: save formats + mark completed_at
   S->>B: stop
 ```
 
 ---
 
-## 5. Package map
-
-| Package | Responsibility |
-|---------|----------------|
-| `run.py` | Interactive launcher → builds argv → invokes scraper |
-| `core/` | CLI orchestration, BFS crawler, per-page flow, user pipelines |
-| `auth/` | Login, sessions, MFA, walls, profiles |
-| `utils/` | Browser pool, proxies, robots, detection, origin probe, network debug, screenshots, assets |
-| `data/` | HTML parse, page records, multi-format export |
-| `config/` | Defaults |
-| `scope/` | Domain / depth / URL allow-deny |
-| `store/` | Scan folder layout |
-| `models/` | Scan metadata and typed records |
-| `vapt/` | Opt-in De-Caffeinator launcher |
-| `docs/` | Architecture docs |
-
----
-
-## 6. Pipeline
-
-| Pipeline | Module | Status |
-|----------|--------|--------|
-| **User scrape pipeline** | `core/pipeline.py` (`PipelineManager`) | **Active** — `--pipeline-file` mutates page dicts before save |
-
----
-
-## 7. Configuration spine
+## 5. Task split: scrape vs VAPT
 
 ```mermaid
-flowchart LR
-  Defaults["config/config.py DEFAULT_CONFIG"] --> Session["session_config dict"]
-  CLI["argparse in scraper"] --> Session
-  Session --> Crawler
+flowchart TD
+  Start[scraper.run] --> Task{args.task}
+  Task -->|scrape default| ScrapePath[Proxy Browser Auth Crawler Storage]
+  Task -->|vapt| VaptPath[ScanSession + subprocess De-Caffeinator]
+  ScrapePath --> Artifacts[scrape/ network/ assets/ meta/]
+  VaptPath --> Artifacts2[analysis/decaffeinator/ + meta/]
 ```
 
-Important defaults:
-
-- Scrape formats: `json,csv,html`
-- Crawl respects robots unless `--no-robots`
-- Auth wall policy default: `skip`
+| Task | Browser crawl? | Primary output |
+|------|----------------|----------------|
+| `scrape` (default) | Yes | `scrape/data.json`, `report.html`, … |
+| `vapt` | No (De-Caffeinator may use Playwright internally) | `analysis/decaffeinator/` |
 
 ---
 
-## 8. On-disk output model
+## 6. Package map
+
+| Package / path | Responsibility |
+|----------------|----------------|
+| `run.py` | Thin shim → interactive menu |
+| `cli/scraper.py` | CLI parser, doctor, scrape/VAPT orchestration |
+| `cli/interactive.py` | Menu UX → argv builder |
+| `core/crawler.py` | Single / BFS crawl, session init, retries orchestration |
+| `core/page_scrape_flow.py` | Per-URL goto → wall → bot → captcha → collect |
+| `core/pipeline.py` | Optional user post-processing hooks |
+| `auth/` | AuthManager, profiles, sessions, MFA, walls |
+| `captcha/` | CapSolver detect / extract / solve / inject |
+| `utils/` | Browser, proxy, robots, detection, humanize, network, screenshots, assets, consent, origin |
+| `data/` | HTML parse, page records, multi-format storage |
+| `store/` | Scan folder layout + `meta.json` |
+| `models/` | `ScanMetadata`, `TargetMetadata`, origin models |
+| `vapt/` | De-Caffeinator launcher |
+| `config/` | `DEFAULT_CONFIG` |
+| `decaffeinator/` | Git submodule (tool at `blob-unpacker/`) |
+
+---
+
+## 7. Critical separation: auth wall vs bot block
+
+```mermaid
+flowchart TD
+  Page[Loaded page] --> Wall{is_auth_wall?}
+  Wall -->|yes| Policy[abort / skip / relogin]
+  Policy --> NoBot[Do NOT mark proxy failure]
+  Wall -->|no| Bot{is_bot_detected?}
+  Bot -->|yes| Cap[CapSolver + stealth + evasion]
+  Bot -->|no| Happy[consent → humanize → extract]
+```
+
+This separation is intentional and must not be collapsed. Details: [AUTH](architecture/AUTH.md) · [BROWSER](architecture/BROWSER.md).
+
+---
+
+## 8. Concurrency model
+
+- One shared Chromium process.
+- `concurrency = N` → N `BrowserSlot` contexts.
+- Each slot can pin a different proxy + UA + optional geo/timezone identity.
+- Auth login always uses **slot 0**; `storage_state` is broadcast to other slots.
+- BFS takes batches of up to N URLs and `asyncio.gather`s them.
+
+---
+
+## 9. Artifact model
+
+Every scrape or VAPT run creates a **scan session**:
 
 ```text
-scraped_data/
-  <domain>_<target_id>/
-    scans/
-      <timestamp>_<scan_id>/
-        scrape/       # data.json, data.csv, report.html, …
-        network/      # failure / challenge network dumps
-        assets/
-          pdfs/
-          sourcemaps/
-          screenshots/
-        meta/
-          meta.json
-          session.json
+scraped_data/<domain>_<target8>/scans/<timestamp>_<scan8>/
+  scrape/ | network/ | analysis/ | assets/ | meta/
 ```
 
-Sessions (auth) live separately under `sessions/` (gitignored).
+See [SCAN_LAYOUT.md](SCAN_LAYOUT.md).
 
 ---
 
-## 9. Concurrency model
+## 10. Status matrix (product)
 
-```mermaid
-flowchart TB
-  Seed[Seed URL] --> Queue[BFS deque]
-  Queue --> Batch["Batch size = concurrency"]
-  Batch --> S0[Slot 0 context]
-  Batch --> S1[Slot 1 context]
-  Batch --> SN[Slot N context]
-  S0 --> Recs[Page records]
-  S1 --> Recs
-  SN --> Recs
-  Recs --> Visited[visited + enqueue internal links]
-  Visited --> Queue
-```
-
-Each **slot** = isolated browser context with:
-
-- Own proxy (optional)
-- Own UA / Client Hints identity
-- Shared auth `storage_state` after login (broadcast)
-
-Login always uses **slot 0**; when authenticated, slot-0 proxy is pinned (no voluntary rotate).
+| Area | Status | Notes |
+|------|--------|-------|
+| Dynamic crawl (Patchright) | Stable | Primary path |
+| Lightweight aiohttp engine | Supported | Falls back to dynamic on bot block |
+| Auth login / session / TOTP | Stable | Patchright-only |
+| CapSolver widgets | Stable | Default on when key present |
+| Managed CF interstitial | Partial | Detected; CapSolver usually cannot clear |
+| Proxy playbooks | Stable | residential / datacenter / none |
+| Network debug dumps | Stable | RUM beacons ignored |
+| De-Caffeinator VAPT | Stable | Submodule required |
+| In-tree VAPT analyzers | Removed | Use De-Caffeinator instead |
 
 ---
 
-## 10. Feature status matrix
+## 11. Configuration surface
 
-| Feature | Status |
-|---------|--------|
-| Single-page + BFS crawl | Active |
-| Concurrent browser slots | Active |
-| Proxy pool + health + sticky | Active |
-| Robots + delays | Active |
-| AuthManager (Patchright) | Active |
-| Session restore / TTL / Fernet | Active |
-| Mid-crawl auth-wall policy | Active |
-| Manual origin IP / Host bypass | Library-only (`session_config.origin_access`; no CLI) |
-| Network debug dumps on scrape failures | Active (default on) |
-| Bot detection + CAPTCHA prompt | Active |
-| Multi-format export | Active |
-| PDF / sourcemap download | Active |
-| User `PipelineManager` | Active |
-| `api_fuzzer` | Not implemented |
-
----
-
-## 11. Design principles
-
-1. **Scrape spine first** — browser crawl + page records are the core path.
-2. **Auth is a facade** — engines stay swappable behind `AuthManager`.
-3. **Slot isolation** — concurrency via contexts, not tabs in one profile.
-4. **Additive CLI** — new flags never break existing `--login` / `--session-file`.
-5. **Security gated** — invasive behaviors stay opt-in.
-6. **Historical scans** — every run is a versioned session folder under the target.
-
----
-
-## 12. Module architecture index
-
-| Doc | Focus |
-|-----|-------|
-| [architecture/AUTH.md](architecture/AUTH.md) | Login, sessions, MFA, walls, bootstrap |
-| [architecture/CRAWL.md](architecture/CRAWL.md) | Crawler, page flow, browser pool |
-| [architecture/DATA.md](architecture/DATA.md) | Parse, records, storage, scan layout |
-| [architecture/PROXY_ORIGIN.md](architecture/PROXY_ORIGIN.md) | Proxies, robots, manual origin IP |
-
-Open the visual one-pager: [`webvac-architecture-one-page.html`](webvac-architecture-one-page.html).
+Defaults live in `webvac/config/config.py`. CLI flags overlay into `session_config` inside `scraper.run`. Full map: [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md).
