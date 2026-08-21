@@ -17,7 +17,7 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 - Auth walls (`/login`, `/ap/signin`, …) skipped separately from bot/WAF blocks
 - Human-like mouse/scroll/warmup on Patchright Chromium (`--no-humanize` to disable)
 - Network debug dumps on scrape failures (per-scan `network/` folder)
-- Optional CapSolver auto-CAPTCHA (reCAPTCHA / hCaptcha / Turnstile)
+- Optional CapSolver auto-CAPTCHA (on by default when a key is present)
 - Logout URL deny and sticky proxy when authenticated
 - Optional opt-in VAPT task powered by De-Caffeinator
 
@@ -295,26 +295,29 @@ Auth/login URLs (`/ap/signin`, `/login`, `/register`, …) are classified as `au
 
 ### Auto CAPTCHA (CapSolver)
 
-When a bot/CAPTCHA page is detected, WebVac can call [CapSolver](https://www.capsolver.com/) to solve reCAPTCHA v2/v3, hCaptcha, or Cloudflare Turnstile, then inject the token into the page. Manual headed prompt remains the fallback.
+When a bot/CAPTCHA page is detected, WebVac calls [CapSolver](https://www.capsolver.com/) by default if an API key is present (reCAPTCHA v2/v3, hCaptcha, or Cloudflare Turnstile), then injects the token into the page.
 
 ```bash
 # Recommended: gitignored key file (copy examples/capsolver.example.key → capsolver.key)
-python -m webvac --url https://example.com --mode single --captcha-solver capsolver
+python -m webvac --url https://example.com --mode single
 
 # or via environment
 set CAPSOLVER_API_KEY=YOUR_KEY
-python -m webvac --url https://example.com --captcha-solver capsolver
+python -m webvac --url https://example.com
 
 # or one-off flag (ends up in shell history)
 python -m webvac --url https://example.com --mode single \
-  --captcha-solver capsolver --captcha-api-key YOUR_KEY
+  --captcha-api-key YOUR_KEY
+
+# disable even when a key file exists
+python -m webvac --url https://example.com --captcha-solver none
 ```
 
 - Key file: repo-root `capsolver.key` (gitignored) or `.env` with `CAPSOLVER_API_KEY=`
+- CapSolver is **on by default** when a key is found
 - `--captcha-solver none|capsolver` (`none` disables even if a key file exists)
 - `--captcha-api-key KEY` (or `CAPSOLVER_API_KEY` / `WEBVAC_CAPSOLVER_KEY`)
 - `--captcha-timeout SECS` (default 120)
-- `--no-captcha-prompt`: disable manual fallback after auto-solve fails
 
 ## Proxy File Format
 

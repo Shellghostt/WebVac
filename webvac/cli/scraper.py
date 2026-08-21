@@ -404,8 +404,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["none", "capsolver"],
         default=None,
         help=(
-            "Auto CAPTCHA provider (default: none). "
-            "Requires --captcha-api-key or CAPSOLVER_API_KEY / WEBVAC_CAPSOLVER_KEY."
+            "Auto CAPTCHA provider (default: capsolver when a key is present). "
+            "Use 'none' to disable even if capsolver.key / CAPSOLVER_API_KEY exists."
         ),
     )
     p.add_argument(
@@ -599,22 +599,28 @@ async def _run_doctor(args) -> int:
 
     from webvac.captcha.config import CaptchaSolverConfig
 
-    cap = CaptchaSolverConfig.from_mapping(
-        {
-            "captcha_solver": getattr(args, "captcha_solver", None),
-            "captcha_api_key": getattr(args, "captcha_api_key", None),
-            "captcha_timeout": getattr(args, "captcha_timeout", None),
-        }
-    )
-    if getattr(args, "captcha_solver", None) == "capsolver":
-        if cap.api_key:
-            _pass("CapSolver key detected.")
-        else:
-            _fail("CapSolver requested but no API key found.")
+    cap_map = {
+        "captcha_api_key": getattr(args, "captcha_api_key", None),
+        "captcha_timeout": getattr(args, "captcha_timeout", None),
+    }
+    if getattr(args, "captcha_solver", None):
+        cap_map["captcha_solver"] = args.captcha_solver
+        if args.captcha_solver == "none":
+            cap_map["captcha_solver_disabled"] = True
+    else:
+        # Match runtime default: CapSolver on when a key file/env is present.
+        cap_map["captcha_solver"] = "capsolver"
+    cap = CaptchaSolverConfig.from_mapping(cap_map)
+    if cap.enabled and cap.api_key:
+        _pass(f"CapSolver enabled by default (key …{cap.api_key[-4:]}).")
+    elif getattr(args, "captcha_solver", None) == "capsolver" and not cap.api_key:
+        _fail("CapSolver requested but no API key found.")
+    elif getattr(args, "captcha_solver", None) == "none":
+        _warn("CapSolver explicitly disabled (--captcha-solver none).")
     elif cap.api_key:
         _warn("CapSolver key detected but solver is not enabled.")
     else:
-        _warn("No CapSolver key configured.")
+        _warn("No CapSolver key configured (solver stays off until key is present).")
 
     proxy_manager = None
     if args.proxy_file:

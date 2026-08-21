@@ -23,9 +23,10 @@ DEFAULT_CONFIG = {
     # CAPTCHA manual prompt timeout (seconds); 0 = wait forever
     "captcha_prompt_timeout_sec": 300,
 
-    # Auto CAPTCHA solver (CapSolver). Set captcha_solver=capsolver + API key.
-    "captcha_solver": "none",          # none | capsolver
-    "captcha_api_key": "",             # or env CAPSOLVER_API_KEY / WEBVAC_CAPSOLVER_KEY
+    # Auto CAPTCHA solver (CapSolver). Enabled automatically when an API key is present.
+    # Use captcha_solver=none (or --captcha-solver none) to force disable.
+    "captcha_solver": "capsolver",     # none | capsolver
+    "captcha_api_key": "",             # or env CAPSOLVER_API_KEY / WEBVAC_CAPSOLVER_KEY / capsolver.key
     "captcha_api_base": "https://api.capsolver.com",
     "captcha_solver_timeout_sec": 120,
     "captcha_poll_interval_sec": 2.0,
