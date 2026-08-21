@@ -48,6 +48,12 @@ class ScanMetadata:
     pages_visited: int = 0
     crawler_version: str = "2.1.0"
 
+    def mark_completed(self) -> str:
+        """Stamp completed_at (UTC ISO) if not already set. Returns the timestamp."""
+        if not self.completed_at:
+            self.completed_at = datetime.now(timezone.utc).isoformat()
+        return self.completed_at
+
     def to_dict(self) -> dict:
         return {
             "scan_id": self.scan_id,

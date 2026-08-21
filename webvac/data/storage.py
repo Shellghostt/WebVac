@@ -73,6 +73,7 @@ class Storage:
             scrape_dir = layout["scrape"]
             meta_dir = layout["meta"]
             session_key = session.session_name
+            scan.mark_completed()
             paths: dict[str, str] = {
                 "meta": session.write_meta(
                     slug,

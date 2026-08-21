@@ -147,6 +147,8 @@ def run_decaffeinator_task(args) -> DecaffeinatorResult:
 
     result = subprocess.run(cmd, cwd=root, shell=False)
     run_report_path, summary_path = _discover_report_paths(output_dir, args.url)
+    scan.mark_completed()
+    session.write_meta("decaffeinator", interrupted=result.returncode != 0)
 
     return DecaffeinatorResult(
         session_dir=session.session_dir,
