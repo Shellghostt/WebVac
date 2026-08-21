@@ -15,7 +15,7 @@ WebVac/
 │   └── pipeline.example.py
 ├── docs/                       # architecture & guides
 ├── scripts/                    # tooling (e.g. architecture PDF)
-├── tests/                      # unittest suite
+├── decaffeinator/              # De-Caffeinator submodule (VAPT)
 └── webvac/                     # installable Python package
     ├── __init__.py
     ├── __main__.py             # python -m webvac

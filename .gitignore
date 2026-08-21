@@ -63,3 +63,7 @@ build/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Local / tooling
+.pytest_cache/
+arc.png

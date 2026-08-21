@@ -1,7 +1,7 @@
 # WebVac — Full System Architecture
 
 **Last updated:** 2026-07-27  
-**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [Changes](CHANGES_AND_IMPROVEMENTS.md)
+**Related:** [Authentication](architecture/AUTH.md) · [Crawl & Browser](architecture/CRAWL.md) · [Data & Storage](architecture/DATA.md) · [Proxy & Origin](architecture/PROXY_ORIGIN.md) · [Changelog](../CHANGELOG.md)
 
 ---
 
@@ -139,8 +139,8 @@ sequenceDiagram
 | `scope/` | Domain / depth / URL allow-deny |
 | `store/` | Scan folder layout |
 | `models/` | Scan metadata and typed records |
-| `tests/` | Unit + e2e coverage |
-| `docs/` | Architecture & change docs |
+| `vapt/` | Opt-in De-Caffeinator launcher |
+| `docs/` | Architecture docs |
 
 ---
 

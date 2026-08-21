@@ -46,7 +46,7 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 - `webvac/utils/`: Browser, proxies, robots, origin probe, screenshots, network debug, humanize
 - `webvac/data/`: HTML parse, page records, storage/export
 - `examples/`: Input templates (auth, proxies, session, pipeline) — see [`examples/README.md`](examples/README.md)
-- `docs/`, `tests/`, `scripts/`
+- `docs/`, `scripts/`
 
 ## Requirements
 
@@ -366,21 +366,13 @@ scraped_data/
 - [`docs/architecture/CRAWL.md`](docs/architecture/CRAWL.md) — Crawler, page flow, browser pool
 - [`docs/architecture/DATA.md`](docs/architecture/DATA.md) — Parsing, page records, storage layout
 - [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, manual origin IP
-- [`docs/CHANGES_AND_IMPROVEMENTS.md`](docs/CHANGES_AND_IMPROVEMENTS.md) — Recent changes + improvement ideas
 - [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — One-page visual architecture
+- [`CHANGELOG.md`](CHANGELOG.md) — Release history
 
 To regenerate architecture PDF:
 
 ```bash
 python scripts/generate_architecture_pdf.py
-```
-
-## Testing
-
-Run tests from project root:
-
-```bash
-python -m unittest discover -s tests -p "test_*.py"
 ```
 
 ## Notes on Security and Responsible Usage
