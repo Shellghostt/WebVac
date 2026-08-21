@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--decaffeinator-root",
         default=None,
         metavar="DIR",
-        help="Path to the De-Caffeinator root directory (defaults to ./trial4/blob-unpacker).",
+        help="Path to the De-Caffeinator root directory (defaults to ./decaffeinator/blob-unpacker).",
     )
     p.add_argument(
         "--vapt-profile",

@@ -112,7 +112,7 @@ def print_banner():
             + _B + b["v"] + _RST
         )
 
-    tag = "asyncio scraper  ·  crawl" if _unicode_ok() else "asyncio scraper | crawl"
+    tag = "asyncio scraper  ·  crawl  ·  vapt" if _unicode_ok() else "asyncio scraper | crawl | vapt"
     pad = max(0, (w - 2 - len(tag)) // 2)
     print(
         _B + b["v"] + _RST
@@ -417,6 +417,94 @@ def select_session_file(*, default: str = "") -> Optional[str]:
     return choice
 
 
+def _build_vapt_cmd_args(url: str) -> Optional[list[str]]:
+    """Collect De-Caffeinator / blob-unpacker flags for --task vapt."""
+    from webvac.vapt.decaffeinator import resolve_decaffeinator_root
+
+    cmd_args = ["--task", "vapt", "--url", url]
+
+    section("VAPT / blob unpacker")
+    ui_info("This launches De-Caffeinator instead of the scrape pipeline.")
+    ui_info("Results land under the scan session in analysis/decaffeinator/")
+
+    try:
+        root = resolve_decaffeinator_root()
+        ui_ok(f"De-Caffeinator found: {root}")
+    except FileNotFoundError as exc:
+        ui_warn(str(exc))
+        custom = prompt_string(
+            "Path to blob-unpacker root (folder that contains run.py)", ""
+        )
+        if not custom:
+            return None
+        try:
+            root = resolve_decaffeinator_root(custom)
+            cmd_args += ["--decaffeinator-root", root]
+            ui_ok(f"Using {root}")
+        except FileNotFoundError as exc2:
+            ui_err(str(exc2))
+            return None
+
+    profile_choice = prompt_choice(
+        "Scan profile",
+        [
+            "standard — default coverage",
+            "quick — entry page only, faster",
+            "stealth — low concurrency, higher delays",
+            "deep — max depth, more pages, lower entropy",
+        ],
+        0,
+    )
+    profile = profile_choice.split(" — ", 1)[0]
+    if profile != "standard":
+        cmd_args += ["--vapt-profile", profile]
+
+    pw = prompt_choice(
+        "Use Playwright to capture SPA / dynamically loaded JS?",
+        [
+            "No (HTTP crawl only)",
+            "Yes (--vapt-playwright)",
+        ],
+        0,
+    )
+    if pw.startswith("Yes"):
+        cmd_args.append("--vapt-playwright")
+        visible = prompt_choice(
+            "Show the Playwright browser window?",
+            [
+                "No (headless)",
+                "Yes (visible window)",
+            ],
+            0,
+        )
+        if visible.startswith("Yes"):
+            cmd_args.append("--no-headless")
+
+    wb = prompt_choice(
+        "Query Wayback Machine for historical JS?",
+        [
+            "No",
+            "Yes (--vapt-wayback)",
+        ],
+        0,
+    )
+    if wb.startswith("Yes"):
+        cmd_args.append("--vapt-wayback")
+
+    files = prompt_choice(
+        "Write deobfuscated / source JS files to disk?",
+        [
+            "Yes (recommended)",
+            "No (--vapt-no-files)",
+        ],
+        0,
+    )
+    if files.startswith("No"):
+        cmd_args.append("--vapt-no-files")
+
+    return cmd_args
+
+
 def run_command(cmd_args):
     command = [sys.executable, "-m", "webvac"] + cmd_args
     display_args = _redact_cmd_args(cmd_args)
@@ -439,7 +527,7 @@ def run_command(cmd_args):
         print(_B + b["v"] + _RST + " " + _W + chunk + _RST + " " * pad + " " + _B + b["v"] + _RST)
     print(_B + b["bl"] + b["h"] * (w - 2) + b["br"] + _RST)
     _blank()
-    ui_info("Starting scraper - live output below")
+    ui_info("Starting job — live output below")
     _rule()
     _blank()
 
@@ -497,13 +585,20 @@ def main():
         print_menu([
             ("1", "Quick scrape", "Single page — fast extract & report"),
             ("2", "Site crawler", "BFS crawl — page limits & concurrency"),
-            ("3", "Scan library", "Browse scraped_data / scans / reports"),
-            ("4", "Quit", "Exit the launcher"),
+            ("3", "VAPT / JS analysis", "De-Caffeinator blob unpacker — endpoints & secrets"),
+            ("4", "Scan library", "Browse scraped_data / scans / reports"),
+            ("5", "Quit", "Exit the launcher"),
         ])
 
         action = prompt_choice(
             "What would you like to do?",
-            ["Single Page", "Website Crawler", "Scan library", "Quit"],
+            [
+                "Single Page",
+                "Website Crawler",
+                "VAPT / JS analysis",
+                "Scan library",
+                "Quit",
+            ],
             0,
         )
 
@@ -542,7 +637,7 @@ def main():
                         for s in latest:
                             print(f"    {_OK}scans/{s}/{_RST}")
                             print(
-                                f"      {_M}scrape/ · network/ · assets/screenshots/{_RST}"
+                                f"      {_M}scrape/ · network/ · analysis/ · assets/{_RST}"
                             )
             _blank()
             input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
@@ -553,6 +648,29 @@ def main():
         if not url:
             ui_err("URL is required.")
             input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
+            continue
+
+        if action == "VAPT / JS analysis":
+            cmd_args = _build_vapt_cmd_args(url)
+            if not cmd_args:
+                ui_err("VAPT task cancelled.")
+                input(f"  {_A}?{_RST}  Press Enter to return to menu… ")
+                continue
+            rc = run_command(cmd_args)
+            status_note = "completed" if rc == 0 else f"finished (exit code {rc})"
+            if rc == 0:
+                ui_ok(f"VAPT task {status_note}.")
+            else:
+                ui_warn(f"VAPT task {status_note}.")
+            next_action = prompt_choice(
+                "What next?",
+                ["Quit", "Return to main menu (another scan)"],
+                0,
+            )
+            if next_action == "Quit":
+                _blank()
+                print(f"  {_OK}Thanks for using WebVac.{_RST} {_M}See you next crawl.{_RST}\n")
+                break
             continue
 
         cmd_args = ["--url", url]

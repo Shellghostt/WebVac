@@ -27,6 +27,7 @@ Current release: `0.3.0`
 
 Highlights in `0.3.0`:
 - De-Caffeinator integration via `--task vapt`
+- interactive launcher option **VAPT / JS analysis** (`python run.py`)
 - session-scoped VAPT output under `analysis/decaffeinator/`
 - improved `--doctor` preflight checks for both scrape and VAPT workflows
 - streamlined scrape-only core after removing the old in-tree VAPT stack
@@ -124,7 +125,9 @@ python run.py
 # or: webvac-menu
 ```
 
-The launcher helps you choose scrape mode, browser visibility, login/session options, and common runtime settings.
+The launcher helps you choose scrape mode, VAPT / JS analysis, browser visibility, login/session options, and common runtime settings.
+
+Pick **VAPT / JS analysis** to run De-Caffeinator (blob unpacker) instead of the scrape pipeline. That menu option maps to `--task vapt`.
 
 Recommended first command:
 
@@ -144,7 +147,27 @@ python -m webvac --url https://example.com --mode crawl --depth 3 --max-pages 50
 
 ### VAPT task
 
-Use the opt-in VAPT task when you want De-Caffeinator analysis instead of the normal scrape flow:
+Use the opt-in VAPT task when you want De-Caffeinator analysis instead of the normal scrape flow.
+
+Clone with the submodule (or init it after clone):
+
+```bash
+git clone --recurse-submodules https://github.com/Shellghostt/WebVac.git
+# or, inside an existing clone:
+git submodule update --init --recursive
+```
+
+The De-Caffeinator checkout lives at `decaffeinator/` (tool root: `decaffeinator/blob-unpacker`).
+
+From the interactive launcher:
+
+```bash
+python run.py
+```
+
+Then choose **VAPT / JS analysis**.
+
+Or from the CLI:
 
 ```bash
 python -m webvac --task vapt --url https://example.com
@@ -242,7 +265,7 @@ python -m webvac --url https://example.com/dashboard --mode single \
 ### VAPT task (De-Caffeinator)
 
 - `--task vapt`: Run De-Caffeinator instead of the normal scrape pipeline
-- `--decaffeinator-root DIR`: Path to De-Caffeinator (default: `./trial4/blob-unpacker`)
+- `--decaffeinator-root DIR`: Path to De-Caffeinator (default: `./decaffeinator/blob-unpacker`)
 - `--vapt-profile standard|quick|stealth|deep`
 - `--vapt-format json|jsonl`
 - `--vapt-playwright`: Enable SPA asset discovery in De-Caffeinator

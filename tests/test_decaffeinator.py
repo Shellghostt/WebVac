@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from webvac.vapt.decaffeinator import build_decaffeinator_command
 
@@ -21,7 +22,7 @@ def test_build_decaffeinator_command_standard():
     cmd = build_decaffeinator_command(
         args,
         output_dir="out/decaf",
-        root="D:/WebVac/trial4/blob-unpacker",
+        root="D:/WebVac/decaffeinator/blob-unpacker",
     )
     joined = " ".join(cmd)
     assert "run.py" in cmd[1]
@@ -50,7 +51,7 @@ def test_build_decaffeinator_command_deep_with_browser_flags():
     cmd = build_decaffeinator_command(
         args,
         output_dir="out/decaf",
-        root="D:/WebVac/trial4/blob-unpacker",
+        root="D:/WebVac/decaffeinator/blob-unpacker",
     )
     assert "--deep" in cmd
     assert "--playwright" in cmd
@@ -59,3 +60,32 @@ def test_build_decaffeinator_command_deep_with_browser_flags():
     assert "--no-files" in cmd
     assert "jsonl" in cmd
     assert "250" in cmd
+
+
+def test_interactive_vapt_menu_builds_task_flags(tmp_path):
+    from webvac.cli.interactive import _build_vapt_cmd_args
+
+    run_py = tmp_path / "run.py"
+    run_py.write_text("# stub\n", encoding="utf-8")
+    answers = iter(
+        [
+            "deep — max depth, more pages, lower entropy",
+            "Yes (--vapt-playwright)",
+            "Yes (visible window)",
+            "Yes (--vapt-wayback)",
+            "No (--vapt-no-files)",
+        ]
+    )
+
+    with patch(
+        "webvac.vapt.decaffeinator.resolve_decaffeinator_root",
+        return_value=str(tmp_path),
+    ), patch("webvac.cli.interactive.prompt_choice", side_effect=lambda *a, **k: next(answers)):
+        cmd = _build_vapt_cmd_args("https://example.com")
+
+    assert cmd[:4] == ["--task", "vapt", "--url", "https://example.com"]
+    assert "--vapt-profile" in cmd and "deep" in cmd
+    assert "--vapt-playwright" in cmd
+    assert "--no-headless" in cmd
+    assert "--vapt-wayback" in cmd
+    assert "--vapt-no-files" in cmd

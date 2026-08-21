@@ -26,7 +26,7 @@ class DecaffeinatorResult:
 
 def _default_decaffeinator_root() -> str:
     repo_root = os.path.abspath(os.getcwd())
-    return os.path.join(repo_root, "trial4", "blob-unpacker")
+    return os.path.join(repo_root, "decaffeinator", "blob-unpacker")
 
 
 def resolve_decaffeinator_root(explicit_root: Optional[str] = None) -> str:
@@ -35,7 +35,7 @@ def resolve_decaffeinator_root(explicit_root: Optional[str] = None) -> str:
     if not os.path.isfile(run_py):
         raise FileNotFoundError(
             f"De-Caffeinator launcher not found at {run_py}. "
-            "Pass --decaffeinator-root or place it under trial4/blob-unpacker."
+            "Pass --decaffeinator-root or place it under decaffeinator/blob-unpacker."
         )
     return root
 
