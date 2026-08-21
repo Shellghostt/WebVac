@@ -10,6 +10,7 @@
 - ignore Cloudflare RUM/beacon traffic in network-debug challenge classification
 - enable CapSolver by default when an API key is present (`--captcha-solver none` to disable)
 - stamp `meta.completed_at` when scrape/VAPT sessions finish
+- expand full project documentation under `docs/` (overview, workflows, architecture deep dives, config, security)
 - add task-aware doctor checks for De-Caffeinator root and Node/npx availability
 - remove the old in-tree VAPT pipeline and simplify WebVac around scrape-first workflows
 - update README setup/docs for `--doctor`, direct-proxy fallback behavior, and the new VAPT task

@@ -359,17 +359,21 @@ scraped_data/
           screenshots/
         meta/
           meta.json
-          session.json
 ```
 
-## Architecture Docs
+## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Full system architecture (layers, sequence, status matrix)
-- [`docs/architecture/AUTH.md`](docs/architecture/AUTH.md) — Authentication / sessions / MFA / auth-walls
-- [`docs/architecture/CRAWL.md`](docs/architecture/CRAWL.md) — Crawler, page flow, browser pool
-- [`docs/architecture/DATA.md`](docs/architecture/DATA.md) — Parsing, page records, storage layout
-- [`docs/architecture/PROXY_ORIGIN.md`](docs/architecture/PROXY_ORIGIN.md) — Proxies, robots, manual origin IP
-- [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — One-page visual architecture
+Full technical docs (architecture, workflows, diagrams, config, security):
+
+- **Index:** [`docs/README.md`](docs/README.md)
+- [`docs/OVERVIEW.md`](docs/OVERVIEW.md) — What WebVac is / is not
+- [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) — End-to-end scrape, auth, CapSolver, VAPT flows
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Layered system architecture
+- Deep dives: [`docs/architecture/`](docs/architecture/) — CLI, Crawl, Browser, Auth, Captcha, Proxy, Network, Data, VAPT
+- [`docs/SCAN_LAYOUT.md`](docs/SCAN_LAYOUT.md) — On-disk session layout + `meta.json`
+- [`docs/CONFIG_REFERENCE.md`](docs/CONFIG_REFERENCE.md) — Defaults and CLI mapping
+- [`docs/SECURITY.md`](docs/SECURITY.md) — Secrets and responsible use
+- [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — Visual one-pager
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history
 
 To regenerate architecture PDF:
@@ -380,8 +384,10 @@ python scripts/generate_architecture_pdf.py
 
 ## Notes on Security and Responsible Usage
 
+See also [`docs/SECURITY.md`](docs/SECURITY.md).
+
 - Respect target terms of service and legal boundaries.
-- Use `--no-robots` only when you are explicitly authorized.
+- Use robots bypass only when you are explicitly authorized.
 - Avoid scraping sensitive targets without permission.
 - Store credentials and proxy secrets securely — copy `examples/auth_creds.example.json` to `auth_creds.json` (gitignored).
 - Prefer env vars (`WEBVAC_USER` / `WEBVAC_PASS`) over committing credentials.
