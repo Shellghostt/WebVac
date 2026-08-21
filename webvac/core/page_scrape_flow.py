@@ -311,7 +311,7 @@ async def run_page_scrape(
                     await page.wait_for_timeout(crawler.spa_delay)
                     await crawler._scroll_page(page)
                     data = await crawler._collect_page(
-                        page, url, response, depth, network_collector,
+                        page, url, response, depth,
                         screenshot_path=None,
                     )
                     await _flush_network(
@@ -371,7 +371,7 @@ async def run_page_scrape(
                                 await page2.wait_for_timeout(crawler.spa_delay)
                                 await crawler._scroll_page(page2)
                                 data = await crawler._collect_page(
-                                    page2, url, response2, depth, net2,
+                                    page2, url, response2, depth,
                                     screenshot_path=screenshot_path,
                                 )
                                 await _flush_network(
@@ -395,7 +395,7 @@ async def run_page_scrape(
                         await page2.wait_for_timeout(crawler.spa_delay)
                         await crawler._scroll_page(page2)
                         data = await crawler._collect_page(
-                            page2, url, response2, depth, net2,
+                            page2, url, response2, depth,
                             screenshot_path=screenshot_path,
                         )
                         await _flush_network(
@@ -482,7 +482,7 @@ async def run_page_scrape(
                             await page3.wait_for_timeout(crawler.spa_delay)
                             await crawler._scroll_page(page3)
                             data = await crawler._collect_page(
-                                page3, url, response3, depth, net3,
+                                page3, url, response3, depth,
                                 screenshot_path=screenshot_path,
                             )
                             await _flush_network(
@@ -511,7 +511,7 @@ async def run_page_scrape(
                     await page3.wait_for_timeout(crawler.spa_delay)
                     await crawler._scroll_page(page3)
                     data = await crawler._collect_page(
-                        page3, url, response3, depth, net3,
+                        page3, url, response3, depth,
                         screenshot_path=screenshot_path,
                     )
                     await _flush_network(
@@ -578,7 +578,7 @@ async def run_page_scrape(
             await crawler._scroll_page(page)
             tqdm.write(f"[Crawler] Extracting  {url}")
             data = await crawler._collect_page(
-                page, url, response, depth, network_collector,
+                page, url, response, depth,
                 screenshot_path=screenshot_path,
             )
             await _flush_network(
