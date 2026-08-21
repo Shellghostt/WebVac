@@ -17,9 +17,20 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 _CHALLENGE_HINTS = re.compile(
-    r"cdn-cgi|challenge|captcha|turnstile|hcaptcha|recaptcha|"
-    r"cf-browser|__cf_chl|akamai|bot.?detect|just.?a.?moment|"
+    r"cdn-cgi/challenge|cdn-cgi/l/chk_|__cf_chl|cf-browser|"
+    r"challenge|captcha|turnstile|hcaptcha|recaptcha|"
+    r"just.?a.?moment|akamai|bot.?detect|"
     r"datadome|perimeterx|px-captcha|captcha-delivery",
+    re.I,
+)
+
+# Cloudflare RUM / insights / beacons — not bot challenges.
+_NON_CHALLENGE_NOISE = re.compile(
+    r"cdn-cgi/rum\b|"
+    r"cdn-cgi/beacon\b|"
+    r"cdn-cgi/script_monitor\b|"
+    r"cloudflareinsights\.com|"
+    r"static\.cloudflareinsights\.com",
     re.I,
 )
 
@@ -113,6 +124,8 @@ def classify_challenge_text(*parts: str) -> Optional[str]:
     hay = " ".join(p for p in parts if p)
     if not hay:
         return None
+    if _NON_CHALLENGE_NOISE.search(hay):
+        return None
     for name, pattern, _ in _CHALLENGE_CLASSIFIERS:
         if pattern.search(hay):
             return name
@@ -204,7 +217,7 @@ def summarize_entries(entries: list[dict[str, Any]]) -> dict[str, Any]:
             row["challenge"] = ctype
         if st >= 400 or st == 0:
             failed.append(row)
-        if ctype or _CHALLENGE_HINTS.search(url) or _CHALLENGE_HINTS.search(body):
+        if ctype:
             challenges.append(row)
         if rtype in ("xhr", "fetch") or "/api/" in url.lower() or "graphql" in url.lower():
             if st >= 400 or st == 0:
