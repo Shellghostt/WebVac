@@ -1,15 +1,16 @@
-# Authentication Architecture
+# Authentication architecture
 
-**Parent:** [Full System Architecture](../ARCHITECTURE.md)  
-**Code root:** `webvac/auth/` · wiring in `webvac/cli/scraper.py`, `webvac/core/crawler.py`, `webvac/core/page_scrape_flow.py`, `webvac/utils/browser.py`
+**Parent:** [ARCHITECTURE](../ARCHITECTURE.md)  
+**Code:** `webvac/auth/` · wiring in `cli/scraper.py`, `core/page_scrape_flow.py`, `utils/browser.py`
 
 ---
 
 ## 1. Goals
 
-- Log in once with Patchright, persist session, reuse across crawl slots.
-- Survive mid-crawl session loss (auth walls) with a safe default policy (`skip`).
-- Support MFA/TOTP, multi-step forms, OAuth manual bootstrap, and optional encrypted sessions.
+- Log in once with Patchright, persist `storage_state`, reuse across crawl slots.
+- Survive mid-crawl session loss via **auth-wall** policy (default: `skip`).
+- Support MFA/TOTP, multi-step forms, cookie audits, and optional Fernet-encrypted sessions.
+- Never treat login pages as bot/WAF blocks.
 
 ---
 
@@ -17,216 +18,170 @@
 
 ```mermaid
 flowchart TB
-  subgraph entry [Entry]
-    Scraper[webvac/cli/scraper.py]
-    RunPy[run.py]
-  end
-
-  subgraph facade [Facade]
-    Mgr[AuthManager]
-    Profile[AuthProfile]
-  end
-
-  subgraph engines [Engines]
-    PR[AuthHandler Patchright]
-  end
-
-  subgraph support [Support]
-    Steps[steps.py]
-    MFA[mfa.py]
-    Pop[popups.py]
-    Wall[wall.py]
-    Sess[session_store.py]
-    Creds[credentials.py]
-    Audit[cookie_audit.py]
-  end
-
-  subgraph browser [Browser]
-    BM[BrowserManager]
-  end
-
-  subgraph crawl [Crawl]
-    Flow[page_scrape_flow]
-    Crawler[crawler]
-  end
-
-  RunPy --> Scraper
-  Scraper --> Mgr
-  Mgr --> Profile
-  Mgr --> PR
-  Mgr --> Steps
-  Mgr --> MFA
-  Mgr --> Pop
-  Mgr --> Wall
-  Mgr --> Sess
-  Mgr --> Creds
-  Mgr --> Audit
-  Mgr --> BM
-  Flow --> Wall
+  Scraper[cli/scraper.py] --> Mgr[AuthManager]
+  Mgr --> Profile[AuthProfile]
+  Mgr --> Handler[AuthHandler Patchright]
+  Mgr --> Steps[steps.py]
+  Mgr --> MFA[mfa.py]
+  Mgr --> Wall[wall.py]
+  Mgr --> Sess[session_store.py]
+  Mgr --> Creds[credentials.py]
+  Mgr --> Pop[popups.py]
+  Mgr --> Audit[cookie_audit.py]
+  Mgr --> BM[BrowserManager]
+  Flow[page_scrape_flow] --> Wall
   Flow -->|relogin| Mgr
-  Crawler --> Wall
-  BM -->|broadcast state| Crawler
 ```
 
 ---
 
-## 3. Auth lifecycle
+## 3. Lifecycle
 
 ```mermaid
 stateDiagram-v2
   [*] --> Idle
-  Idle --> Bootstrap: --auth-bootstrap
-  Idle --> Restore: session file exists
+  Idle --> Restore: session file / prior state
   Idle --> Login: --login + credentials
-
-  Bootstrap --> Authenticated: Enter after manual SSO
-  Restore --> Verify: auth-check-url set
-  Restore --> Authenticated: verify OK / no check
-  Restore --> Login: expired or verify fail
-
-  Login --> StepsOrEngine: profile steps or classic fill
-  StepsOrEngine --> MFA: OTP / TOTP / CAPTCHA
-  MFA --> Persist: capture storage_state
-  Persist --> Verify
-  Verify --> Authenticated: OK
-  Verify --> Failed: wall still present
-
-  Authenticated --> Crawl
-  Crawl --> AuthWall: mid-crawl wall detected
-  AuthWall --> Skip: policy skip
-  AuthWall --> Abort: policy abort
-  AuthWall --> Login: policy relogin
-  Authenticated --> [*]
-  Failed --> [*]
+  Idle --> Anonymous: no auth
+  Restore --> Verify: --auth-check-url
+  Verify --> Crawl: ok
+  Verify --> Login: invalid
+  Login --> Persist: save storage_state
+  Persist --> Broadcast: all slots
+  Broadcast --> Crawl
+  Anonymous --> Crawl
+  Crawl --> WallEvent: mid-crawl wall
+  WallEvent --> Skip: policy skip
+  WallEvent --> Relogin: policy relogin
+  WallEvent --> Abort: policy abort
 ```
 
----
-
-## 4. Module responsibilities
-
-| Module | Responsibility |
-|--------|----------------|
-| `manager.py` | Single facade: restore, login, verify, bootstrap, ensure, is_auth_wall |
-| `profile.py` | Rich JSON profile: selectors, steps, totp, policies, TTL |
-| `session_store.py` | `storage_state` I/O, TTL meta, optional Fernet |
-| `credentials.py` | `WEBVAC_USER` / `WEBVAC_PASS`, redact helpers |
-| `auth.py` | Patchright classic login (auto + manual selectors) |
-| `steps.py` | Declarative multi-step runner |
-| `mfa.py` | TOTP generation + interactive OTP/CAPTCHA pause |
-| `wall.py` | Heuristics for login pages + logout URL deny |
-| `popups.py` | Cookie/consent banner dismiss |
-| `cookie_audit.py` | Flag warnings after login |
-| `default_creds.py` | Vendor default-panel fingerprints |
+**Note:** OAuth “manual bootstrap” flags described in older notes are **not** in current code. Auth is Patchright login + session restore only.
 
 ---
 
-## 5. Session & storage_state flow
+## 4. AuthManager API
 
-```mermaid
-sequenceDiagram
-  participant AM as AuthManager
-  participant Eng as Patchright
-  participant BM as BrowserManager
-  participant SS as session_store
-  participant Disk as sessions/*.json
-
-  AM->>Eng: login on Patchright slot 0
-  Eng-->>AM: success
-  AM->>BM: capture_auth_session(slot=0)
-  AM->>BM: broadcast_auth_session all slots
-  AM->>SS: save_session storage_state + meta
-  SS->>Disk: write plaintext or Fernet blob
-
-  Note over AM,Disk: Later run
-  AM->>SS: load_session
-  SS->>Disk: read
-  alt TTL expired
-    AM-->>AM: force re-login
-  else valid
-    AM->>BM: set_auth_session + broadcast
-    opt auth-check-url
-      AM->>BM: goto check URL
-      AM->>AM: is_auth_wall?
-    end
-  end
-```
-
-**Formats accepted:**
-
-1. Playwright `storage_state` (`cookies` + `origins`) — preferred  
-2. Legacy plain cookie list JSON — normalized on load  
-
-**Metadata (`_webvac_session_meta`):** `created_at`, `last_verified_at`, `ttl_sec`, `seed_url`
+| Method | Role |
+|--------|------|
+| `restore(session_file)` | Load storage_state, TTL check, set + broadcast, optional verify |
+| `login(seed_url)` | Resolve creds → Patchright login on slot 0 → persist → broadcast → verify → cookie audit |
+| `verify(check_url)` | Navigate; fail if still auth wall |
+| `ensure_authenticated` | Restore else login |
+| `is_auth_wall` / `is_logout_url` | Heuristics |
+| `on_auth_wall` | Normalized policy (`abort` \| `skip` \| `relogin`) |
 
 ---
 
-## 6. Mid-crawl auth-wall policy
+## 5. Login paths
+
+1. Goto login URL (CapSolver network watcher attached when key present).
+2. Dismiss cookie/consent popups (`popups.py`).
+3. One of:
+   - **Declarative steps** — `run_steps_patchright` (`fill` / `click` / `wait` / `totp` / `otp_prompt`)
+   - **Selector profile** — username/password CSS selectors
+   - **Auto** — `AuthHandler` heuristics
+4. Post-login CapSolver if a widget appeared (`_handle_post_login_captcha`).
+5. Capture `storage_state`, save under `sessions/`, broadcast to slots.
+
+### Credentials resolution order
+
+CLI flags → auth profile JSON → `WEBVAC_USER` / `WEBVAC_PASS`.
+
+---
+
+## 6. Sessions
+
+**Module:** `session_store.py`
+
+| Feature | Detail |
+|---------|--------|
+| Format | Playwright `storage_state` preferred |
+| Legacy | Cookie-list JSON normalized on load |
+| Meta | `created_at`, `last_verified_at`, `ttl_sec`, `seed_url` |
+| Encryption | Optional Fernet via `WEBVAC_SESSION_KEY` |
+| Default path | `sessions/<host>_auth.json` |
+
+---
+
+## 7. MFA / TOTP
+
+**Module:** `mfa.py` + profile fields
+
+- `generate_totp(secret)` via `pyotp`
+- Interactive `otp_prompt` / manual challenge stdin (timeout configurable)
+- Profile: `totp_secret`, `otp_prompt`, step action `totp`
+
+---
+
+## 8. Auth walls (critical)
+
+**Module:** `wall.py`
+
+### Detection
+
+| Strength | Signal |
+|----------|--------|
+| Strong | Path regex: `/login`, `/signin`, `/register`, Amazon `/ap/signin`, … |
+| Soft | Password `<input>` + login-ish title |
+| Logout deny | `/logout`, `/signout`, … when authenticated |
+
+### Policies (`--on-auth-wall`)
+
+| Policy | Behavior |
+|--------|----------|
+| `skip` (default) | Return `status=auth_wall` record; continue crawl |
+| `relogin` | Attempt AuthManager login then retry |
+| `abort` | Raise / stop crawl |
+
+### Invariants
+
+- Auth walls do **not** trigger bot retries, CapSolver-as-WAF, or proxy failure marks.
+- `is_bot_detected*` returns **False** when the page is an auth wall (even if CAPTCHA widgets are present).
 
 ```mermaid
 flowchart TD
-  Goto[page.goto success] --> Check{authenticated?}
-  Check -->|no| Continue[continue scrape]
-  Check -->|yes| Wall{is_auth_wall?}
-  Wall -->|no| Continue
-  Wall -->|yes| Policy{on_auth_wall}
-  Policy -->|skip| Skip[close page, skip URL]
-  Policy -->|abort| Abort[raise / stop crawl]
-  Policy -->|relogin| Relogin[AuthManager.login]
-  Relogin -->|ok| Retry[retry URL]
-  Relogin -->|fail| Skip
+  P[Page] --> W{auth wall?}
+  W -->|yes| Pol[wall policy]
+  W -->|no| B{bot / WAF?}
+  B -->|yes| Cap[CapSolver + evasion]
+  B -->|no| OK[scrape]
 ```
-
-Heuristics (`wall.py`): password inputs, login path keywords, sign-in titles, seed login path match.
-
-Logout soft-deny when authed: `/logout`, `/signout`, `/sign-out`, `/log-out`.
 
 ---
 
-## 7. Credential & secret surfaces
+## 9. CLI surface
 
-```mermaid
-flowchart LR
-  CLI["--username --password"] --> Resolve[resolve_credentials]
-  Env["WEBVAC_USER WEBVAC_PASS"] --> Resolve
-  JSON["auth profile JSON"] --> Resolve
-  Resolve --> Mgr[AuthManager.login]
-  Key["WEBVAC_SESSION_KEY"] --> Fernet[session_store encrypt]
-  Fernet --> Disk[session file]
-```
-
-- Passwords redacted in `run.py` printed commands.
-- Real `auth_creds.json` is gitignored; ship `examples/auth_creds.example.json` only.
-- Profiles with `auth_engine: "nodriver"` are rejected (Nodriver was removed).
-
----
-
-## 8. Login modes
-
-| Mode | Login | Crawl |
-|------|-------|-------|
-| Default `--login` | Patchright (`AuthHandler`) | Patchright |
-| `--auth-bootstrap` | Visible Patchright manual SSO | Patchright |
-| `--session-file` only | Restore cookies (skip login) | Patchright |
-
-Login always on **slot 0**. `--login` forces `--engine dynamic` (no lightweight).
+| Flag | Role |
+|------|------|
+| `--login` | Force fresh login |
+| `--login-url` | Explicit login URL |
+| `--username` / `--password` | Creds |
+| `--auth-profile` | JSON profile path |
+| `--session-file` | Restore storage_state |
+| `--auth-check-url` | Post-auth verification URL |
+| `--on-auth-wall` | `abort\|skip\|relogin` |
+| `--session-ttl` | Session TTL seconds |
+| `--otp-prompt` | Interactive OTP |
+| `--dismiss-selector` | Extra popup selectors |
+| `--no-auth-proxy-rotate` | Pin proxy while authenticated |
 
 ---
 
-## 9. CLI / env surface
+## 10. Supporting modules
 
-```
---login
---login-url
---username / --password
---session-file
---auth-profile
---auth-check-url
---on-auth-wall abort|skip|relogin
---session-ttl
---auth-bootstrap
---otp-prompt
---no-auth-proxy-rotate
---dismiss-selector (repeatable)
-```
+| File | Role |
+|------|------|
+| `profile.py` | `AuthProfile`, loaders |
+| `credentials.py` | Env / CLI resolution + redaction |
+| `cookie_audit.py` | HttpOnly / Secure / SameSite warnings |
+| `default_creds.py` | Vendor default-panel fingerprint DB (informational in page records) |
+| `auth.py` | Low-level Patchright login / form helpers |
 
-Env: `WEBVAC_USER`, `WEBVAC_PASS`, `WEBVAC_SESSION_KEY`
+---
+
+## 11. Related
+
+- [CAPTCHA](CAPTCHA.md) — login + scrape CapSolver  
+- [CRAWL](CRAWL.md) — mid-crawl wall handling  
+- [SECURITY](../SECURITY.md) — credential storage  

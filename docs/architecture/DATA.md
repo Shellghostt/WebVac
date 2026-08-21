@@ -1,139 +1,98 @@
-# Data & Storage Architecture
+# Data, parse & storage architecture
 
-**Parent:** [Full System Architecture](../ARCHITECTURE.md)  
-**Code:** `data/`, `store/`, `models/`, `utils/asset_downloader.py`
+**Parent:** [ARCHITECTURE](../ARCHITECTURE.md)  
+**Code:** `webvac/data/html_parser.py`, `page_record.py`, `storage.py`, `core/pipeline.py`, `store/scan_session.py`
 
 ---
 
 ## 1. Goals
 
-- Turn raw HTML into a stable **page record** dict.
-- Persist versioned scan sessions with multi-format exports.
-- Diff against prior scans and download discovered assets.
+- Turn rendered HTML into structured page records.
+- Apply status overrides (auth wall / bot page).
+- Optionally run user pipelines.
+- Export multi-format artifacts into the scan session layout.
 
 ---
 
-## 2. Component diagram
+## 2. Pipeline
 
 ```mermaid
 flowchart LR
-  Page[Browser page HTML] --> Parser[HtmlPageParser]
-  Parser --> Builder
-  Builder --> Dict[page dict]
-  Dict --> Pipe[PipelineManager optional]
-  Pipe --> Results[results list]
-  Results --> Storage[Storage.save]
-  Results --> Assets[AssetDownloader]
-  Storage --> Layout[ScanSession folders]
+  HTML[page.content] --> Parser[HtmlPageParser.build_from_html]
+  Parser --> Rec[PageRecordBuilder.from_html]
+  Rec --> Pipe[PipelineManager optional]
+  Pipe --> Store[Storage.save]
+  Store --> Meta[meta.json + scrape/*]
 ```
+
+`Crawler._collect_page` is the bridge from a live Page to `PageRecordBuilder`.
 
 ---
 
-## 3. Page record pipeline
+## 3. Parsed fields
 
-```mermaid
-flowchart TD
-  HTML[HTML string + URL] --> Parse[BeautifulSoup / lxml]
-  Parse --> Extract[title, text, links, forms, emails, meta, …]
-  Extract --> Creds[DefaultCredsChecker hints]
-  Creds --> Record[page record dict]
-  Record --> UserPipe{--pipeline-file?}
-  UserPipe -->|yes| Transform[process_item hooks]
-  UserPipe -->|no| Out[append to results]
-  Transform --> Out
-```
-
-**Key types:**
-
-| Module | Role |
-|--------|------|
-| `data/html_parser.py` | DOM extraction |
-| `data/page_record.py` | `PageRecordBuilder.from_html` |
-| `core/pipeline.py` | User post-process hooks |
-| `models/scan.py` | `ScanMetadata`, `TargetMetadata` |
+| Field | Source |
+|-------|--------|
+| `url`, `status`, `scraped_at` | Identity |
+| `title` | `<title>` |
+| `meta` | name / property / http-equiv |
+| `open_graph` / `twitter_card` | `og:*` / `twitter:*` |
+| `structured_data` | JSON-LD |
+| `headings` | h1–h6 |
+| `paragraphs` | `<p>` |
+| `links` | url, text, internal/external, rel (honeypots skipped) |
+| `images` | src, alt, dimensions |
+| `tables` / `lists` / `forms` | Structured |
+| `media` | video / audio / iframe |
+| `code_blocks` | pre/code |
+| `emails` / `phone_numbers` / `social_links` | Regex / known hosts |
+| `word_count` | Full text |
+| `default_creds` | Vendor panel fingerprint matches |
+| `targeted_data` | `--extract-css` / `--extract-xpath` |
+| `screenshot` | Path if captured |
+| `error` | Present on failures |
 
 ---
 
-## 4. Scan session layout
+## 4. Status overrides
 
-```mermaid
-flowchart TB
-  Root[scraped_data] --> Target["target folder domain_id"]
-  Target --> Scans[scans/]
-  Scans --> Scan["timestamp_scanid/"]
-  Scan --> Scrape[scrape/]
-  Scan --> Network[network/]
-  Scan --> Meta[meta/]
-  Scan --> Assets[assets/]
-```
+| Status | Meaning |
+|--------|---------|
+| `success` | Normal parsed page |
+| `auth_wall` | Login/register wall (policy skip) — **not** a hard failure |
+| `failed` | Bot/WAF page, HTTP error, exception, exhausted retries |
 
-`store/scan_session.py` owns path helpers and parent-scan chaining (`--parent-scan-id`).
+Sync bot heuristics in `PageRecordBuilder` can mark challenge HTML as `failed` even if the navigator thought it was fine.
 
 ---
 
 ## 5. Export formats
 
-`data/storage.py` → `Storage.save`:
+| Format | File under `scrape/` |
+|--------|----------------------|
+| `json` | `data.json` |
+| `html` | `report.html` |
+| `csv` | `data.csv` |
+| `markdown` | `report.md` |
+| `sqlite` | `{slug}.db` |
+| `all` | everything |
 
-| Format | Typical file |
-|--------|----------------|
-| JSON | `scrape/data.json` |
-| CSV | `scrape/data.csv` |
-| HTML | `scrape/report.html` |
-| Markdown | `scrape/data.md` |
-| SQLite | `scrape/data.sqlite` |
-| all | union of above |
+Default CLI: `json,html`.
 
-Screenshots land in `assets/screenshots/`; network failure dumps in `network/`.
-
----
-
-## 6. Asset download path
-
-```mermaid
-flowchart LR
-  Results[page records] --> PDF[collect_pdf_urls]
-  PDF --> DL[AssetDownloader.download_pdfs]
-  DL --> Out[assets/pdfs/]
-  JS[JS collector / sourcemaps] -.-> SM[assets/sourcemaps/]
-  Cap[ScreenshotModule] --> SS[assets/screenshots/]
-```
-
-Triggered from `scraper._persist_run` after crawl completes (or on interrupt with partial results).
+`Storage.save` always calls `scan.mark_completed()` before writing `meta.json` so `completed_at` is populated.
 
 ---
 
-## 7. Models overview
+## 6. Assets
 
-```mermaid
-classDiagram
-  class ScanMetadata {
-    scan_id
-    target
-    started_at
-    config snapshot
-  }
-  class PageRecord {
-    url
-    title
-    links
-    forms
-    emails
-    status
-  }
-  ScanMetadata --> PageRecord : produces many
-```
+- PDFs: `utils/asset_downloader.py` → `assets/pdfs/` when `download_pdfs` enabled  
+- Screenshots: `assets/screenshots/`  
+- Sourcemaps directory reserved in layout  
 
 ---
 
-## 8. Data contracts (page dict)
+## 7. Related
 
-Typical fields produced for scrape mode (simplified):
-
-- Identity: `url`, `final_url`, `title`, `status`
-- Content: `text`, `headings`, `meta`
-- Graph: `links` (`internal` / `external`), `forms`
-- Signals: `emails`, `phones`, default-cred hints
-- Ops: timestamps, depth, errors, bot flags
-
-User pipelines must treat this dict as the contract; avoid breaking Storage/HTML report renderers.
+- [SCAN_LAYOUT](../SCAN_LAYOUT.md)  
+- [CRAWL](CRAWL.md)  
+- [CONFIG_REFERENCE](../CONFIG_REFERENCE.md)  
