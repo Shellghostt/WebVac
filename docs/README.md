@@ -41,6 +41,7 @@ All diagrams use **Mermaid** (GitHub, VS Code Mermaid preview, or any Mermaid re
 |----------|----------------|
 | [SCAN_LAYOUT.md](SCAN_LAYOUT.md) | On-disk scan session layout and `meta.json` schema |
 | [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) | `DEFAULT_CONFIG` knobs and CLI flag mapping |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Pre-push / pre-release checks for browser, docs, VAPT, and secrets |
 | [SECURITY.md](SECURITY.md) | Secrets handling, responsible use, auth/proxy safety |
 
 ### Visual assets
