@@ -30,7 +30,23 @@ _NON_CHALLENGE_NOISE = re.compile(
     r"cdn-cgi/beacon\b|"
     r"cdn-cgi/script_monitor\b|"
     r"cloudflareinsights\.com|"
-    r"static\.cloudflareinsights\.com",
+    r"static\.cloudflareinsights\.com|"
+    r"googletagmanager\.com|"
+    r"google-analytics\.com|"
+    r"analytics\.google\.com|"
+    r"doubleclick\.net|"
+    r"bat\.bing\.com|"
+    r"connect\.facebook\.net|"
+    r"facebook\.com/tr\b|"
+    r"static\.hotjar\.com|"
+    r"script\.hotjar\.com|"
+    r"segment\.com/analytics|"
+    r"cdn\.segment\.com|"
+    r"api\.segment\.io|"
+    r"api\.amplitude\.com|"
+    r"cdn\.amplitude\.com|"
+    r"googlesyndication\.com|"
+    r"googleadservices\.com",
     re.I,
 )
 
