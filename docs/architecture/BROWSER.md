@@ -50,10 +50,19 @@ flowchart TB
 | `humanize_after_goto` / `settle_page` | Micro-moves after successful loads |
 | Scroll | `_scroll_page` uses humanized wheel paths |
 | Evasion | Extra `human_warmup` after proxy rotate |
+| Viewport / screen | Context viewport, Playwright `screen`, and `outer*`/`screen.*` init spoofs stay aligned |
 
 CLI: `--no-humanize`, `--no-humanize-warmup`.
 
 Cursor paths use bezier curves with per-page last-position memory (`get_cursor` / `set_cursor`).
+
+### Viewport / screen alignment
+
+Bot scripts often compare `window.innerWidth` (Playwright viewport) with `screen.width` / `window.outerWidth`. WebVac now:
+
+1. Picks slot-0 viewport **before** Chromium launch so `--window-size` matches
+2. Passes matching `viewport` + `screen` into each context
+3. Injects init-script overrides for `outerWidth` / `outerHeight` / `screen.*` / `devicePixelRatio`
 
 ---
 

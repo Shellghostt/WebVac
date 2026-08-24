@@ -309,7 +309,7 @@ _STEALTH_INIT_SCRIPT = r"""
         return data;
     };
 
-    // 9. Screen dimensions — match the viewport so screen != window.innerWidth discrepancy
+    // 9. Screen color depth (width/height / outer* are set per-context to match viewport)
     Object.defineProperty(screen, 'colorDepth',      { get: () => 24 });
     Object.defineProperty(screen, 'pixelDepth',      { get: () => 24 });
 
@@ -319,6 +319,43 @@ _STEALTH_INIT_SCRIPT = r"""
     delete window.__pwInitScripts;
 
 })();
+"""
+
+
+def _viewport_geometry_script(width: int, height: int) -> str:
+    """
+    Align screen / outer window metrics with the Playwright viewport.
+
+    Sites compare window.inner* (from context viewport) to screen.* and
+    window.outer*. A mismatch is a common headless / automation signal.
+    """
+    w = max(800, int(width))
+    h = max(600, int(height))
+    # Rough Chromium chrome (tab bar + window frame) above the page viewport.
+    chrome_h = 85
+    outer_w = w
+    outer_h = h + chrome_h
+    screen_w = w
+    screen_h = outer_h
+    return f"""
+(() => {{
+    'use strict';
+    const innerW = {w};
+    const innerH = {h};
+    const outerW = {outer_w};
+    const outerH = {outer_h};
+    const screenW = {screen_w};
+    const screenH = {screen_h};
+    try {{
+        Object.defineProperty(window, 'outerWidth',  {{ get: () => outerW }});
+        Object.defineProperty(window, 'outerHeight', {{ get: () => outerH }});
+        Object.defineProperty(screen, 'width',       {{ get: () => screenW }});
+        Object.defineProperty(screen, 'height',      {{ get: () => screenH }});
+        Object.defineProperty(screen, 'availWidth',  {{ get: () => screenW }});
+        Object.defineProperty(screen, 'availHeight', {{ get: () => Math.max(innerH, screenH - 40) }});
+        Object.defineProperty(window, 'devicePixelRatio', {{ get: () => 1 }});
+    }} catch (_) {{}}
+}})();
 """
 
 
@@ -826,7 +863,11 @@ class BrowserManager:
                 if i < len(self._slot_proxy_configs)
                 else SlotIdentity()
             )
-            if ident.ua:
+            if i == 0:
+                # Slot 0 identity/viewport was seeded before launch so
+                # --window-size, context viewport, and screen spoof stay aligned.
+                pass
+            elif ident.ua:
                 self._apply_identity(
                     pinned_ua=ident.ua,
                     pinned_platform=ident.platform,
@@ -848,11 +889,37 @@ class BrowserManager:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    def _seed_launch_identity(self) -> None:
+        """Pick slot-0 identity/viewport before Chromium launch (window-size)."""
+        ident = (
+            self._slot_proxy_configs[0]
+            if self._slot_proxy_configs
+            else SlotIdentity()
+        )
+        if ident.ua:
+            self._apply_identity(
+                pinned_ua=ident.ua,
+                pinned_platform=ident.platform,
+                pinned_sec_ch_ua=ident.sec_ch_ua,
+                pinned_city=ident.city or None,
+                pinned_lat=ident.lat if ident.timezone else None,
+                pinned_lon=ident.lon if ident.timezone else None,
+                pinned_timezone=ident.timezone or None,
+            )
+            city = self._session_location[0]
+            print(f"[Browser] [Identity] {self._session_ua[:65]}...  location={city}")
+        else:
+            self._rotate_identity()
+
     async def _launch(self, engine: str) -> None:
         """Launch Patchright Chromium with hardened headless args."""
         from patchright.async_api import async_playwright
 
         self.engine = engine
+        # Resolve viewport before launch so --window-size matches slot-0 context.
+        self._seed_launch_identity()
+        vw = int(self._session_viewport.get("width", 1920))
+        vh = int(self._session_viewport.get("height", 1080))
         launch_args = [
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -868,7 +935,7 @@ class BrowserManager:
             "--metrics-recording-only",
             "--mute-audio",
             "--no-zygote",
-            f"--window-size={self._session_viewport['width']},{self._session_viewport['height']}",
+            f"--window-size={vw},{vh}",
             # Prefer language consistency with context locale
             "--lang=en-US",
         ]
@@ -950,9 +1017,14 @@ class BrowserManager:
         city, lat, lon, timezone = self._session_location
         locale = self._fixed_locale or DEFAULT_CONFIG["locale"]   # always en-US
 
+        vp_w = int(self._session_viewport.get("width", 1920))
+        vp_h = int(self._session_viewport.get("height", 1080))
+        # Keep Playwright screen metrics aligned with the page viewport.
+        screen_size = {"width": vp_w, "height": vp_h + 85}
+
         kwargs: dict = dict(
             user_agent=self._session_ua,
-            viewport=self._session_viewport,
+            viewport={"width": vp_w, "height": vp_h},
             locale=locale,
             timezone_id=timezone,
             color_scheme="light",
@@ -981,7 +1053,11 @@ class BrowserManager:
         if proxy:
             kwargs["proxy"] = proxy
 
-        context = await self._browser.new_context(**kwargs)
+        # Prefer native screen= when Patchright/Playwright supports it.
+        try:
+            context = await self._browser.new_context(**kwargs, screen=screen_size)
+        except TypeError:
+            context = await self._browser.new_context(**kwargs)
 
         # Inject full stealth init script (WebRTC block, navigator masking,
         # canvas/audio noise, plugin spoofing) — runs before any page JS
@@ -990,5 +1066,6 @@ class BrowserManager:
             f"Object.defineProperty(navigator, 'platform', "
             f"{{ get: () => '{self._navigator_platform()}' }});"
         )
+        await context.add_init_script(_viewport_geometry_script(vp_w, vp_h))
 
         return context
