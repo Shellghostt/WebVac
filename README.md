@@ -57,13 +57,15 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 ## Installation
 
 1. Clone the repository.
-2. Create and activate a virtual environment.
-3. Install dependencies.
-4. Install Patchright browser binaries.
+2. Initialize the De-Caffeinator submodule (needed for `--task vapt`).
+3. Create and activate a virtual environment.
+4. Install dependencies.
+5. Install Patchright browser binaries.
 
 ### Windows PowerShell
 
 ```powershell
+git submodule update --init --recursive
 python -m venv .venv
 (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& .\.venv\Scripts\Activate.ps1)
 pip install -r requirements.txt
@@ -74,6 +76,7 @@ python -m patchright install
 ### Linux/macOS
 
 ```bash
+git submodule update --init --recursive
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -82,6 +85,8 @@ python -m patchright install
 ```
 
 `pip install -e .` registers the `webvac` and `webvac-menu` console scripts and makes imports resolve as `webvac.*`.
+
+If you only want scrape/crawl mode, WebVac itself still works without using the submodule. But `--task vapt` requires `decaffeinator/blob-unpacker` to be present and initialized.
 
 ## First Run Checklist
 
@@ -372,6 +377,7 @@ Full technical docs (architecture, workflows, diagrams, config, security):
 - Deep dives: [`docs/architecture/`](docs/architecture/) — CLI, Crawl, Browser, Auth, Captcha, Proxy, Network, Data, VAPT
 - [`docs/SCAN_LAYOUT.md`](docs/SCAN_LAYOUT.md) — On-disk session layout + `meta.json`
 - [`docs/CONFIG_REFERENCE.md`](docs/CONFIG_REFERENCE.md) — Defaults and CLI mapping
+- [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) — Pre-push / pre-release verification
 - [`docs/SECURITY.md`](docs/SECURITY.md) — Secrets and responsible use
 - [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — Visual one-pager
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history
