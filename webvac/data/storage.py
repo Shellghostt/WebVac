@@ -554,6 +554,25 @@ class Storage:
             og_rows   = "".join(f"<tr><td>{self._esc(k)}</td><td>{self._esc(str(v))}</td></tr>" for k,v in og.items() if v)
             tc_rows   = "".join(f"<tr><td>{self._esc(k)}</td><td>{self._esc(str(v))}</td></tr>" for k,v in tc.items() if v)
 
+            # Tab buttons are built outside the f-string: Python 3.11 cannot
+            # parse a backslash inside an f-string expression (PEP 701 is 3.12+).
+            forms_tab_btn = ""
+            if forms:
+                forms_tab_btn = (
+                    "<button class='tab-btn' onclick=\"switchTab(this, 'forms-"
+                    + str(i)
+                    + "')\">Forms ("
+                    + str(len(forms))
+                    + ")</button>"
+                )
+            contact_tab_btn = ""
+            if emails or phones or social:
+                contact_tab_btn = (
+                    "<button class='tab-btn' onclick=\"switchTab(this, 'contact-"
+                    + str(i)
+                    + "')\">Contact</button>"
+                )
+
             page_cards += f"""
             <div class="page-card" id="page-{i}" style="display:none">
                 {og_img_html}
@@ -583,9 +602,9 @@ class Storage:
                     <button class="tab-btn active" onclick="switchTab(this, 'content-{i}')">Content</button>
                     <button class="tab-btn" onclick="switchTab(this, 'links-{i}')">Links ({len(links)})</button>
                     <button class="tab-btn" onclick="switchTab(this, 'images-{i}')">Images ({len(images)})</button>
-                    {"<button class='tab-btn' onclick=\"switchTab(this, 'forms-" + str(i) + "')\">Forms (" + str(len(forms)) + ")</button>" if forms else ""}
+                    {forms_tab_btn}
                     <button class="tab-btn" onclick="switchTab(this, 'meta-{i}')">Meta / SEO</button>
-                    {"<button class='tab-btn' onclick=\"switchTab(this, 'contact-{i}')\">Contact</button>" if (emails or phones or social) else ""}
+                    {contact_tab_btn}
                 </div>
 
                 <div class="tab-panel" id="content-{i}">
