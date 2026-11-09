@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+scraped_data
+decaffeinator
+docs
+examples
+tests
+.env
+capsolver.key
+proxies.txt
+auth_creds.json
+sessions
