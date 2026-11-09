@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 - 2026-11-09
 
-- add PyPI packaging metadata and `pip install webvac` install path
+- publish the package to PyPI (`pip install webvac`) with a tag-triggered release workflow
 - single-source the version from `webvac.__version__`
-- add a tag-triggered PyPI release workflow using Trusted Publishing
+- add a 43-test pytest suite covering proxy parsing, storage, and robots behaviour
+- add GitHub Actions CI on Ubuntu and Windows for Python 3.11 and 3.12
+- add a Docker image for scrape mode with Patchright Chromium preinstalled
+- add `CONTRIBUTING.md` and link it from the README
+- fix report HTML generation on Python 3.11 and correct the Contact tab's page index
 
 ## 0.3.0 - 2026-08-18
 

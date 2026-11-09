@@ -147,8 +147,8 @@ Before tagging:
 Then publish:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 The workflow refuses to publish if the tag and package version disagree. After
