@@ -1,15 +1,37 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "webvac"
-version = "0.3.0"
+dynamic = ["version"]
 description = "Asyncio dynamic web scraper with auth and an optional De-Caffeinator VAPT task."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Adityaaa" }]
+keywords = [
+  "scraping",
+  "crawler",
+  "browser-automation",
+  "playwright",
+  "patchright",
+  "asyncio",
+  "security",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Security",
+]
 dependencies = [
   "patchright",
   "beautifulsoup4==4.12.3",
@@ -27,9 +49,19 @@ dependencies = [
 dev = ["pytest"]
 socks = ["aiohttp-socks"]
 
+[project.urls]
+Homepage = "https://github.com/Shellghostt/WebVac"
+Repository = "https://github.com/Shellghostt/WebVac"
+Issues = "https://github.com/Shellghostt/WebVac/issues"
+Changelog = "https://github.com/Shellghostt/WebVac/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Shellghostt/WebVac/blob/main/docs/README.md"
+
 [project.scripts]
 webvac = "webvac.cli.scraper:main"
 webvac-menu = "webvac.cli.interactive:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "webvac.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
