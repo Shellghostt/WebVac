@@ -125,7 +125,38 @@ git submodule status
 
 ---
 
-## 10. Release-ready outcome
+## 10. PyPI publish
+
+Publishing runs from the tag-driven `Release` workflow
+(`.github/workflows/release.yml`) using PyPI Trusted Publishing, so no API token
+is stored in the repository.
+
+One-time setup:
+
+- Create the `webvac` project on PyPI, or add a pending trusted publisher so the
+  first successful run creates it.
+- Trusted publisher fields: owner `Shellghostt`, repository `WebVac`, workflow
+  `release.yml`.
+
+Before tagging:
+
+- `python -m build` and `python -m twine check dist/*` pass locally.
+- `webvac/__init__.py` `__version__` equals the intended tag (`vX.Y.Z`).
+- `CHANGELOG.md` has an entry for the version.
+
+Then publish:
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+The workflow refuses to publish if the tag and package version disagree. After
+it completes, verify with `pip install webvac` in a clean environment.
+
+---
+
+## 11. Release-ready outcome
 
 You are in good shape when:
 

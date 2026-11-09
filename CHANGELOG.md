@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- add PyPI packaging metadata and `pip install webvac` install path
+- single-source the version from `webvac.__version__`
+- add a tag-triggered PyPI release workflow using Trusted Publishing
+
 ## 0.3.0 - 2026-08-18
 
 - add an opt-in `--task vapt` workflow powered by De-Caffeinator

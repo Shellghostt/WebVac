@@ -56,6 +56,19 @@ All application code lives in the installable `webvac/` package. See [`docs/STRU
 
 ## Installation
 
+### From PyPI
+
+```bash
+pip install webvac
+python -m patchright install
+```
+
+That installs the `webvac` and `webvac-menu` console scripts. The PyPI package
+contains the scraping core only; use a source checkout below if you also want
+the `examples/`, `docs/`, or the `--task vapt` submodule.
+
+### From source
+
 1. Clone the repository.
 2. Initialize the De-Caffeinator submodule (needed for `--task vapt`).
 3. Create and activate a virtual environment.
