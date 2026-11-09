@@ -23,14 +23,19 @@ WebVac is an asyncio-powered dynamic web scraping and crawling tool built for mo
 
 ## Release
 
-Current release: `0.3.0`
+Current release: `0.3.1`
 
-Highlights in `0.3.0`:
-- De-Caffeinator integration via `--task vapt`
-- interactive launcher option **VAPT / JS analysis** (`python run.py`)
-- session-scoped VAPT output under `analysis/decaffeinator/`
-- improved `--doctor` preflight checks for both scrape and VAPT workflows
-- streamlined scrape-only core after removing the old in-tree VAPT stack
+Highlights in `0.3.1`:
+- published to PyPI — install with `pip install webvac`
+- 43-test pytest suite covering proxy parsing, storage, and robots behaviour
+- GitHub Actions CI on Ubuntu and Windows for Python 3.11 and 3.12
+- Docker image for scrape mode with Patchright Chromium preinstalled
+- `CONTRIBUTING.md` contributor guide and a tag-driven release workflow
+- fix report HTML generation on Python 3.11 and the Contact tab's page index
+
+The `0.3.0` release introduced the De-Caffeinator integration via `--task vapt`,
+the **VAPT / JS analysis** launcher option, session-scoped VAPT output under
+`analysis/decaffeinator/`, and the scrape-first core cleanup.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the release summary.
 
