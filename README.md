@@ -381,6 +381,7 @@ Full technical docs (architecture, workflows, diagrams, config, security):
 - [`docs/SECURITY.md`](docs/SECURITY.md) — Secrets and responsible use
 - [`docs/webvac-architecture-one-page.html`](docs/webvac-architecture-one-page.html) — Visual one-pager
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — Development setup, checks, and PR workflow
 
 To regenerate architecture PDF:
 
@@ -431,7 +432,12 @@ See also [`docs/SECURITY.md`](docs/SECURITY.md).
 
 - [Adityaaa](https://github.com/Shellghostt) — author & maintainer
 
-## Contributing Workflow
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full development setup, the local
+checks (`pytest` + `webvac --doctor`), branch/PR workflow, and how to add tests.
+New contributors can start with issues labelled
+[`good first issue`](https://github.com/Shellghostt/WebVac/labels/good%20first%20issue).
 
 1. Create a feature branch.
 2. Keep changes focused and test locally.
