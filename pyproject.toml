@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = []
+dev = ["pytest"]
 socks = ["aiohttp-socks"]
 
 [project.scripts]
